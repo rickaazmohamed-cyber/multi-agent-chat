@@ -2,17 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Send, X, Laptop, Smartphone, 
   Activity, ShieldAlert, CheckCheck, Lock, Inbox, Circle, RotateCcw,
-  CheckCircle2, Archive
+  CheckCircle2, Archive, LayoutDashboard, LogOut
 } from 'lucide-react';
 
-// === FIREBASE IMPORTS ===
 import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from './firebase';
 
 export default function App() {
   const isWidgetMode = new URLSearchParams(window.location.search).get('mode') === 'embed';
 
-  // === AUTH & UI STATES ===
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState(false);
@@ -21,7 +19,6 @@ export default function App() {
   const [queueFilter, setQueueFilter] = useState('active'); 
   const prevWaitingCountRef = useRef(0);
 
-  // === AGENT ROSTER ===
   const agents = [
     { id: 'a1', name: 'Sarah', dept: 'Technical Support', color: '#10b981' }, 
     { id: 'a2', name: 'Marcus', dept: 'Billing & Sales', color: '#f59e0b' },   
@@ -30,7 +27,6 @@ export default function App() {
   const [activeAgentId, setActiveAgentId] = useState(agents[0].id);
   const activeAgent = agents.find(a => a.id === activeAgentId);
 
-  // === SESSION & MESSAGING STATES ===
   const [customerSessionId, setCustomerSessionId] = useState(null);
   const [customerMessages, setCustomerMessages] = useState([]);
   const [userInput, setUserInput] = useState('');
@@ -43,13 +39,8 @@ export default function App() {
   const customerMessagesEndRef = useRef(null);
   const adminMessagesEndRef = useRef(null);
 
-  const config = {
-    title: 'Acme Live Support',
-    subtitle: 'We typically reply in minutes',
-    primaryColor: '#2563eb'
-  };
+  const config = { title: 'Acme Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
 
-  // Sound Notification
   const playNotificationSound = () => {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -57,7 +48,6 @@ export default function App() {
       const ctx = new AudioContext();
       const osc = ctx.createOscillator();
       const gainNode = ctx.createGain();
-      
       osc.connect(gainNode);
       gainNode.connect(ctx.destination);
       osc.type = 'sine';
@@ -73,17 +63,11 @@ export default function App() {
 
   useEffect(() => {
     let sid = localStorage.getItem('acme_chat_session');
-    if (!sid) {
-      sid = 'sess_' + Math.random().toString(36).substring(2, 10);
-      localStorage.setItem('acme_chat_session', sid);
-    }
+    if (!sid) { sid = 'sess_' + Math.random().toString(36).substring(2, 10); localStorage.setItem('acme_chat_session', sid); }
     setCustomerSessionId(sid);
   }, []);
 
-  const handleResetSession = () => {
-    localStorage.removeItem('acme_chat_session');
-    window.location.reload();
-  };
+  const handleResetSession = () => { localStorage.removeItem('acme_chat_session'); window.location.reload(); };
 
   useEffect(() => {
     if (!customerSessionId) return;
@@ -134,12 +118,9 @@ export default function App() {
     const text = userInput.trim();
     setUserInput('');
     try {
-      const sessionRef = doc(db, 'sessions', customerSessionId);
-      await setDoc(sessionRef, { status: 'waiting', lastMessage: text, updatedAt: Date.now() }, { merge: true });
-      await addDoc(collection(db, `sessions/${customerSessionId}/messages`), {
-        text, sender: 'user', createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      });
-    } catch (err) { showToast("Failed to send.", "error"); }
+      await setDoc(doc(db, 'sessions', customerSessionId), { status: 'waiting', lastMessage: text, updatedAt: Date.now() }, { merge: true });
+      await addDoc(collection(db, `sessions/${customerSessionId}/messages`), { text, sender: 'user', createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+    } catch (err) { showToast("Error.", "error"); }
   };
 
   const handleAdminSend = async (e) => {
@@ -148,12 +129,9 @@ export default function App() {
     const text = adminReplyText.trim();
     setAdminReplyText('');
     try {
-      const sessionRef = doc(db, 'sessions', activeAdminSessionId);
-      await updateDoc(sessionRef, { status: 'active', assignedAgent: activeAgent, lastMessage: `Agent: ${text}`, updatedAt: Date.now() });
-      await addDoc(collection(db, `sessions/${activeAdminSessionId}/messages`), {
-        text, sender: 'agent', agentDetails: activeAgent, createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      });
-    } catch (err) { showToast("Failed to send.", "error"); }
+      await updateDoc(doc(db, 'sessions', activeAdminSessionId), { status: 'active', assignedAgent: activeAgent, lastMessage: `Agent: ${text}`, updatedAt: Date.now() });
+      await addDoc(collection(db, `sessions/${activeAdminSessionId}/messages`), { text, sender: 'agent', agentDetails: activeAgent, createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+    } catch (err) { showToast("Error.", "error"); }
   };
 
   const handleResolveSession = async () => {
@@ -162,6 +140,11 @@ export default function App() {
       await updateDoc(doc(db, 'sessions', activeAdminSessionId), { status: 'resolved', updatedAt: Date.now() });
       setActiveAdminSessionId(null); 
     } catch (err) { showToast("Error.", "error"); }
+  };
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (passwordInput === 'admin123') { setIsAuthenticated(true); } else { setLoginError(true); showToast("Invalid passcode.", "error"); }
   };
 
   const displayedSessions = agentSessions.filter(s => queueFilter === 'active' ? (s.status === 'waiting' || s.status === 'active') : s.status === 'resolved');
@@ -196,9 +179,44 @@ export default function App() {
     );
   }
 
+  // --- FULL DASHBOARD RENDER ---
   return (
     <div className="flex h-screen w-screen bg-slate-900 text-white">
-      {/* Admin Panel Logic here remains the same */}
+      {!isAuthenticated ? (
+        <div className="flex items-center justify-center w-full">
+           <form onSubmit={handleLogin} className="p-8 bg-slate-800 rounded-xl shadow-2xl">
+             <h2 className="text-xl font-bold mb-4">Admin Login</h2>
+             <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="text-black p-2 rounded w-full mb-4" placeholder="Passcode..." />
+             <button type="submit" className="w-full bg-blue-600 p-2 rounded text-white font-bold">Unlock Dashboard</button>
+           </form>
+        </div>
+      ) : (
+        <div className="flex flex-1 overflow-hidden">
+           <div className="w-1/3 border-r border-slate-700 p-4 overflow-y-auto">
+              <h2 className="font-bold mb-4">Support Queue</h2>
+              {displayedSessions.map(s => (
+                <button key={s.id} onClick={() => setActiveAdminSessionId(s.id)} className={`w-full p-4 mb-2 rounded ${activeAdminSessionId === s.id ? 'bg-blue-600' : 'bg-slate-800'}`}>
+                  Session #{s.id.substring(0, 8)} - {s.status}
+                </button>
+              ))}
+           </div>
+           <div className="flex-1 flex flex-col p-4">
+              {activeAdminSessionId ? (
+                <>
+                  <div className="flex-1 overflow-y-auto mb-4">
+                    {adminMessages.map(m => <div key={m.id} className={`p-2 mb-2 ${m.sender === 'agent' ? 'text-right text-blue-400' : 'text-left'}`}>{m.text}</div>)}
+                    <div ref={adminMessagesEndRef} />
+                  </div>
+                  <div className="flex gap-2">
+                    <input value={adminReplyText} onChange={e => setAdminReplyText(e.target.value)} className="flex-1 text-black p-2 rounded" placeholder="Reply..." />
+                    <button onClick={handleAdminSend} className="bg-blue-600 p-2 rounded"><Send /></button>
+                    <button onClick={handleResolveSession} className="bg-emerald-600 p-2 rounded"><Archive /></button>
+                  </div>
+                </>
+              ) : <div className="m-auto opacity-50">Select a chat</div>}
+           </div>
+        </div>
+      )}
     </div>
   );
 }
