@@ -10,6 +10,10 @@ import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy 
 import { db } from './firebase';
 
 export default function App() {
+  // === EMBED MODE CHECK ===
+  // If the URL has ?mode=embed, we only show the chat widget!
+  const isWidgetMode = new URLSearchParams(window.location.search).get('mode') === 'embed';
+
   // === AUTH & UI STATES ===
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
@@ -18,9 +22,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('agent');
   const [previewDevice, setPreviewDevice] = useState('desktop');
   const [notifications, setNotifications] = useState([]);
-
-  // === NEW: INBOX FILTER STATE ===
-  const [queueFilter, setQueueFilter] = useState('active'); // 'active' or 'resolved'
+  const [queueFilter, setQueueFilter] = useState('active'); 
   const prevWaitingCountRef = useRef(0);
 
   // === MULTI-AGENT ROSTER ===
@@ -51,9 +53,6 @@ export default function App() {
     primaryColor: '#2563eb'
   };
 
-  // ==========================================
-  // NOTIFICATION SOUND GENERATOR
-  // ==========================================
   const playNotificationSound = () => {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -66,12 +65,12 @@ export default function App() {
       gainNode.connect(ctx.destination);
       
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, ctx.currentTime); // High pitch (A5)
-      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1); // Drop to A4
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
       
       gainNode.gain.setValueAtTime(0, ctx.currentTime);
       gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.05);
-      gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2); // Quick fade out
+      gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2); 
       
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.25);
@@ -80,9 +79,6 @@ export default function App() {
     }
   };
 
-  // ==========================================
-  // 1. CUSTOMER LOGIC
-  // ==========================================
   useEffect(() => {
     let sid = localStorage.getItem('acme_chat_session');
     if (!sid) {
@@ -109,18 +105,13 @@ export default function App() {
     return () => unsubscribe();
   }, [customerSessionId]);
 
-  // ==========================================
-  // 2. AGENT LOGIC & QUEUE MANAGEMENT
-  // ==========================================
-  
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || isWidgetMode) return; // Agents don't log in via the widget embed
     const q = query(collection(db, 'sessions'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const sessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setAgentSessions(sessions);
 
-      // SOUND ALERT LOGIC: Trigger if waiting count increases
       const currentWaitingCount = sessions.filter(s => s.status === 'waiting').length;
       if (currentWaitingCount > prevWaitingCountRef.current) {
         playNotificationSound();
@@ -128,7 +119,7 @@ export default function App() {
       prevWaitingCountRef.current = currentWaitingCount;
     });
     return () => unsubscribe();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isWidgetMode]);
 
   useEffect(() => {
     if (!activeAdminSessionId) return;
@@ -142,11 +133,6 @@ export default function App() {
     return () => unsubscribe();
   }, [activeAdminSessionId]);
 
-
-  // ==========================================
-  // 3. SENDING & RESOLVING MESSAGES
-  // ==========================================
-  
   const showToast = (message, type = 'success') => {
     const id = Date.now();
     setNotifications(prev => [...prev, { id, message, type }]);
@@ -161,7 +147,6 @@ export default function App() {
     setUserInput('');
 
     try {
-      // Re-open chat if it was resolved
       const sessionRef = doc(db, 'sessions', customerSessionId);
       await setDoc(sessionRef, {
         status: 'waiting', 
@@ -210,7 +195,6 @@ export default function App() {
     }
   };
 
-  // NEW FUNCTION: Mark chat as resolved
   const handleResolveSession = async () => {
     if (!activeAdminSessionId) return;
     try {
@@ -220,7 +204,7 @@ export default function App() {
         updatedAt: Date.now()
       });
       showToast("Chat marked as resolved.");
-      setActiveAdminSessionId(null); // Close the chat pane
+      setActiveAdminSessionId(null); 
     } catch (err) {
       showToast("Failed to resolve chat.", "error");
     }
@@ -239,13 +223,89 @@ export default function App() {
     }
   };
 
-  // Filter the queue for display
   const displayedSessions = agentSessions.filter(session => {
     if (queueFilter === 'active') return session.status === 'waiting' || session.status === 'active';
     if (queueFilter === 'resolved') return session.status === 'resolved';
     return true;
   });
 
+  // ==========================================
+  // EMBED MODE RENDER: ONLY SHOW THE WIDGET
+  // ==========================================
+  if (isWidgetMode) {
+    return (
+      <div className="w-screen h-screen flex flex-col justify-end items-end p-4 bg-transparent font-sans overflow-hidden">
+        {isWidgetOpen ? (
+          <div className="w-full max-w-[340px] h-[500px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden mb-4 animate-in slide-in-from-bottom-4">
+            
+            <div style={{ backgroundColor: config.primaryColor }} className="p-4 text-white flex justify-between items-center shrink-0 shadow-md z-10">
+              <div>
+                <h4 className="font-bold text-sm tracking-wide">{config.title}</h4>
+                <span className="text-[10px] text-white/90">{config.subtitle}</span>
+              </div>
+              <button onClick={() => setIsWidgetOpen(false)} className="hover:bg-black/10 p-1.5 rounded-full transition"><X className="h-5 w-5" /></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50 relative">
+              {customerMessages.length === 0 && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center opacity-60">
+                  <MessageSquare className="h-10 w-10 text-slate-400 mb-3" />
+                  <p className="text-xs text-slate-500">Have a question? Send us a message and an agent will be with you shortly.</p>
+                </div>
+              )}
+              
+              {customerMessages.map((m) => (
+                <div key={m.id} className={`flex gap-2 max-w-[88%] ${m.sender === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}>
+                  {m.sender === 'agent' && (
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[11px] font-bold text-white shadow-sm mt-auto mb-1" style={{ backgroundColor: m.agentDetails?.color || '#000' }}>
+                      {m.agentDetails?.name?.charAt(0) || 'A'}
+                    </div>
+                  )}
+                  <div>
+                    {m.sender === 'agent' && <span className="text-[10px] text-slate-500 ml-1 mb-1 block font-medium">{m.agentDetails?.name}</span>}
+                    <div className={`p-3 text-sm shadow-sm ${m.sender === 'user' ? 'bg-blue-600 text-white rounded-2xl rounded-br-sm' : 'bg-white border border-slate-100 text-slate-800 rounded-2xl rounded-bl-sm'}`}>
+                      {m.text}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div ref={customerMessagesEndRef} />
+            </div>
+
+            <form onSubmit={handleCustomerSend} className="p-3 border-t border-slate-100 bg-white flex gap-2 shrink-0">
+              <input 
+                type="text" 
+                value={userInput} 
+                onChange={(e) => setUserInput(e.target.value)}
+                placeholder="Write a reply..."
+                style={{ color: '#0f172a', backgroundColor: '#f8fafc' }}
+                className="flex-1 bg-white text-sm px-4 py-2.5 rounded-full border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all"
+              />
+              <button type="submit" style={{ backgroundColor: config.primaryColor }} className="h-10 w-10 rounded-full text-white shadow-md flex items-center justify-center hover:scale-105 transition-transform"><Send className="h-4 w-4 ml-0.5" /></button>
+            </form>
+          </div>
+        ) : (
+          <button 
+            onClick={() => setIsWidgetOpen(true)}
+            style={{ backgroundColor: config.primaryColor }}
+            className="w-16 h-16 rounded-full text-white shadow-[0_8px_30px_rgb(0,0,0,0.2)] flex items-center justify-center hover:scale-105 transition-transform duration-300 relative group"
+          >
+            <MessageSquare className="h-7 w-7 group-hover:hidden" />
+            <Activity className="h-7 w-7 hidden group-hover:block" />
+            {/* Notification Dot */}
+            <span className="absolute top-0 right-0 flex h-4 w-4">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-500 border-2 border-white"></span>
+            </span>
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // ==========================================
+  // FULL DASHBOARD RENDER (DEFAULT)
+  // ==========================================
   return (
     <div className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">
       
@@ -259,9 +319,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* ==========================================
-          LEFT PANE: ADMIN DASHBOARD
-         ========================================== */}
       <div className="w-full lg:w-[55%] h-full flex flex-col border-r border-slate-800 bg-slate-900 relative">
         
         {!isAuthenticated ? (
@@ -313,11 +370,7 @@ export default function App() {
             </div>
 
             <div className="flex-1 flex overflow-hidden">
-              
-              {/* Left Column: Session List */}
               <div className="w-2/5 border-r border-slate-800 bg-slate-900 flex flex-col">
-                
-                {/* NEW: QUEUE FILTER TOGGLES */}
                 <div className="flex border-b border-slate-800 bg-slate-950 shrink-0">
                   <button 
                     onClick={() => setQueueFilter('active')}
@@ -359,7 +412,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right Column: Active Chat View */}
               <div className="w-3/5 bg-slate-950 flex flex-col relative">
                 {!activeAdminSessionId ? (
                   <div className="m-auto text-center text-slate-500 flex flex-col items-center gap-2">
@@ -370,8 +422,6 @@ export default function App() {
                   <>
                     <div className="p-3 bg-slate-900 border-b border-slate-800 flex justify-between items-center shrink-0">
                       <span className="text-xs font-semibold text-slate-200">Chat Session: #{activeAdminSessionId.substring(5, 11)}</span>
-                      
-                      {/* NEW: RESOLVE CHAT BUTTON */}
                       <button 
                         onClick={handleResolveSession}
                         className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-emerald-900/50 hover:text-emerald-400 text-slate-300 px-3 py-1.5 rounded transition border border-slate-700 hover:border-emerald-800"
@@ -411,97 +461,10 @@ export default function App() {
         )}
       </div>
 
-      {/* ==========================================
-          RIGHT PANE: SIMULATED CLIENT WEBSITE
-         ========================================== */}
       <div className="flex-1 h-full flex flex-col bg-slate-900">
         <div className="p-3 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
           <div className="flex gap-1">
             <button onClick={() => setPreviewDevice('desktop')} className={`p-2 rounded ${previewDevice === 'desktop' ? 'bg-slate-800 text-blue-400' : 'text-slate-500'}`}><Laptop className="h-4 w-4" /></button>
             <button onClick={() => setPreviewDevice('mobile')} className={`p-2 rounded ${previewDevice === 'mobile' ? 'bg-slate-800 text-blue-400' : 'text-slate-500'}`}><Smartphone className="h-4 w-4" /></button>
           </div>
-          <div className="text-xs text-emerald-400 flex items-center gap-2 bg-emerald-500/10 px-3 py-1 rounded-full"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Firebase Synced</div>
-        </div>
-
-        <div className="flex-1 overflow-auto bg-slate-950 p-6 flex items-center justify-center">
-          <div className={`transition-all bg-slate-50 relative border border-slate-700 shadow-2xl rounded-xl flex flex-col overflow-hidden ${previewDevice === 'desktop' ? 'w-full h-full max-w-5xl' : 'w-[360px] h-[640px]'}`}>
-            
-            <div className="flex-1 p-10 text-center">
-              <h2 className="text-3xl font-black text-slate-800 mb-4">Your Business Website</h2>
-              <p className="text-slate-500 max-w-md mx-auto mb-4">Type a message below. It will automatically generate your unique Customer ID and place you in the Agent Queue on the left!</p>
-              
-              <div className="flex items-center justify-center gap-2">
-                {customerSessionId && <span className="text-xs font-mono bg-slate-200 text-slate-600 px-2 py-1 rounded">Your ID: #{customerSessionId.substring(5, 11)}</span>}
-                
-                <button 
-                  onClick={handleResetSession}
-                  className="flex items-center gap-1 text-[10px] bg-rose-100 text-rose-600 hover:bg-rose-200 px-2 py-1.5 rounded transition font-medium"
-                  title="Clear Local Storage to test a fresh chat"
-                >
-                  <RotateCcw className="h-3 w-3" /> Start Fresh Session
-                </button>
-              </div>
-            </div>
-
-            <div className="absolute right-6 bottom-6 z-40">
-              {isWidgetOpen ? (
-                <div className="w-[320px] h-[460px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
-                  
-                  <div style={{ backgroundColor: config.primaryColor }} className="p-4 text-white flex justify-between items-center shrink-0">
-                    <div>
-                      <h4 className="font-bold text-sm">{config.title}</h4>
-                      <span className="text-[10px] text-white/80">{config.subtitle}</span>
-                    </div>
-                    <button onClick={() => setIsWidgetOpen(false)}><X className="h-5 w-5" /></button>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50">
-                    {customerMessages.length === 0 && <p className="text-xs text-center text-slate-400 mt-4">Send a message to start chatting.</p>}
-                    
-                    {customerMessages.map((m) => (
-                      <div key={m.id} className={`flex gap-2 max-w-[85%] ${m.sender === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}>
-                        {m.sender === 'agent' && (
-                          <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold text-white shadow" style={{ backgroundColor: m.agentDetails?.color || '#000' }}>
-                            {m.agentDetails?.name?.charAt(0) || 'A'}
-                          </div>
-                        )}
-                        <div>
-                          {m.sender === 'agent' && <span className="text-[9px] text-slate-400 ml-1 mb-0.5 block">{m.agentDetails?.name}</span>}
-                          <div className={`p-3 rounded-2xl text-xs ${m.sender === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border text-slate-800 rounded-tl-none shadow-sm'}`}>
-                            {m.text}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    <div ref={customerMessagesEndRef} />
-                  </div>
-
-                  <form onSubmit={handleCustomerSend} className="p-3 border-t bg-white flex gap-2 shrink-0">
-                    <input 
-                      type="text" 
-                      value={userInput} 
-                      onChange={(e) => setUserInput(e.target.value)}
-                      placeholder="Type your message..."
-                      style={{ color: '#0f172a', backgroundColor: '#f8fafc' }}
-                      className="flex-1 bg-white text-xs px-3 py-2 rounded border border-slate-300 focus:outline-none focus:border-blue-500"
-                    />
-                    <button type="submit" style={{ backgroundColor: config.primaryColor }} className="p-2 rounded text-white"><Send className="h-4 w-4" /></button>
-                  </form>
-                </div>
-              ) : (
-                <button 
-                  onClick={() => setIsWidgetOpen(true)}
-                  style={{ backgroundColor: config.primaryColor }}
-                  className="w-14 h-14 rounded-full text-white shadow-2xl flex items-center justify-center hover:scale-105 transition"
-                >
-                  <MessageSquare className="h-6 w-6" />
-                </button>
-              )}
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+          <div className="text-xs text-emerald-4
