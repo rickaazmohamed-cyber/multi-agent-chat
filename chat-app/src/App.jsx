@@ -379,7 +379,8 @@ export default function App() {
 <input 
   type="text" value={userInput} onChange={(e) => setUserInput(e.target.value)}
   placeholder="Type your message..."
-  className="flex-1 text-black bg-white text-xs px-3 py-2 rounded border border-slate-200 focus:outline-none focus:border-blue-500"
+  style={{ color: '#0f172a' }} 
+  className="flex-1 bg-white text-xs px-3 py-2 rounded border border-slate-200 focus:outline-none focus:border-blue-500"
 />
                     <button type="submit" style={{ backgroundColor: config.primaryColor }} className="p-2 rounded text-white"><Send className="h-4 w-4" /></button>
                   </form>
