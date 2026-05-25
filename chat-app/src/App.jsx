@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Settings, Code, Send, X, Laptop, Smartphone, User, 
-  Copy, Check, Activity, Bell, ShieldAlert, CheckCheck, Clock, Lock, Key, Inbox, Circle, RotateCcw
+  Copy, Check, Activity, Bell, ShieldAlert, CheckCheck, Clock, Lock, Key, Inbox, Circle, RotateCcw,
+  CheckCircle2, Archive
 } from 'lucide-react';
 
 // === FIREBASE IMPORTS ===
@@ -17,6 +18,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('agent');
   const [previewDevice, setPreviewDevice] = useState('desktop');
   const [notifications, setNotifications] = useState([]);
+
+  // === NEW: INBOX FILTER STATE ===
+  const [queueFilter, setQueueFilter] = useState('active'); // 'active' or 'resolved'
+  const prevWaitingCountRef = useRef(0);
 
   // === MULTI-AGENT ROSTER ===
   const agents = [
@@ -40,7 +45,6 @@ export default function App() {
   const customerMessagesEndRef = useRef(null);
   const adminMessagesEndRef = useRef(null);
 
-  // Widget config
   const config = {
     title: 'Acme Live Support',
     subtitle: 'We typically reply in minutes',
@@ -48,7 +52,36 @@ export default function App() {
   };
 
   // ==========================================
-  // 1. CUSTOMER LOGIC: Initialize Session
+  // NOTIFICATION SOUND GENERATOR
+  // ==========================================
+  const playNotificationSound = () => {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+      
+      osc.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime); // High pitch (A5)
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1); // Drop to A4
+      
+      gainNode.gain.setValueAtTime(0, ctx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.05);
+      gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2); // Quick fade out
+      
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.25);
+    } catch (e) {
+      console.warn("Audio play blocked by browser policy.", e);
+    }
+  };
+
+  // ==========================================
+  // 1. CUSTOMER LOGIC
   // ==========================================
   useEffect(() => {
     let sid = localStorage.getItem('acme_chat_session');
@@ -59,19 +92,17 @@ export default function App() {
     setCustomerSessionId(sid);
   }, []);
 
-  // TEST FUNCTION: Clear local storage to start a fresh chat
   const handleResetSession = () => {
     localStorage.removeItem('acme_chat_session');
     window.location.reload();
   };
 
-  // Listen to Customer's specific message feed (FIXED: Local Sorting)
   useEffect(() => {
     if (!customerSessionId) return;
-    const q = query(collection(db, `sessions/${customerSessionId}/messages`)); // Removed strict orderBy
+    const q = query(collection(db, `sessions/${customerSessionId}/messages`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let fetchedMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      fetchedMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); // Sort locally
+      fetchedMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       setCustomerMessages(fetchedMsgs);
       setTimeout(() => customerMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     });
@@ -79,26 +110,32 @@ export default function App() {
   }, [customerSessionId]);
 
   // ==========================================
-  // 2. AGENT LOGIC: Inbox Queue & Active Chat
+  // 2. AGENT LOGIC & QUEUE MANAGEMENT
   // ==========================================
   
-  // Listen to all chat sessions for the Inbox Queue
   useEffect(() => {
     if (!isAuthenticated) return;
     const q = query(collection(db, 'sessions'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setAgentSessions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const sessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAgentSessions(sessions);
+
+      // SOUND ALERT LOGIC: Trigger if waiting count increases
+      const currentWaitingCount = sessions.filter(s => s.status === 'waiting').length;
+      if (currentWaitingCount > prevWaitingCountRef.current) {
+        playNotificationSound();
+      }
+      prevWaitingCountRef.current = currentWaitingCount;
     });
     return () => unsubscribe();
   }, [isAuthenticated]);
 
-  // Listen to messages for the specific chat the agent clicked on (FIXED: Local Sorting)
   useEffect(() => {
     if (!activeAdminSessionId) return;
-    const q = query(collection(db, `sessions/${activeAdminSessionId}/messages`)); // Removed strict orderBy
+    const q = query(collection(db, `sessions/${activeAdminSessionId}/messages`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let fetchedMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      fetchedMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); // Sort locally
+      fetchedMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       setAdminMessages(fetchedMsgs);
       setTimeout(() => adminMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     });
@@ -107,7 +144,7 @@ export default function App() {
 
 
   // ==========================================
-  // 3. SENDING MESSAGES
+  // 3. SENDING & RESOLVING MESSAGES
   // ==========================================
   
   const showToast = (message, type = 'success') => {
@@ -124,7 +161,7 @@ export default function App() {
     setUserInput('');
 
     try {
-      // 1. Update/Create the session document
+      // Re-open chat if it was resolved
       const sessionRef = doc(db, 'sessions', customerSessionId);
       await setDoc(sessionRef, {
         status: 'waiting', 
@@ -132,7 +169,6 @@ export default function App() {
         updatedAt: Date.now() 
       }, { merge: true });
 
-      // 2. Add the actual message
       await addDoc(collection(db, `sessions/${customerSessionId}/messages`), {
         text: text,
         sender: 'user',
@@ -153,7 +189,6 @@ export default function App() {
     setAdminReplyText('');
 
     try {
-      // 1. Update session to show it's being handled
       const sessionRef = doc(db, 'sessions', activeAdminSessionId);
       await updateDoc(sessionRef, {
         status: 'active',
@@ -162,7 +197,6 @@ export default function App() {
         updatedAt: Date.now() 
       });
 
-      // 2. Send message
       await addDoc(collection(db, `sessions/${activeAdminSessionId}/messages`), {
         text: text,
         sender: 'agent',
@@ -173,6 +207,22 @@ export default function App() {
     } catch (err) {
       console.error(err);
       showToast("Failed to send reply.", "error");
+    }
+  };
+
+  // NEW FUNCTION: Mark chat as resolved
+  const handleResolveSession = async () => {
+    if (!activeAdminSessionId) return;
+    try {
+      const sessionRef = doc(db, 'sessions', activeAdminSessionId);
+      await updateDoc(sessionRef, {
+        status: 'resolved',
+        updatedAt: Date.now()
+      });
+      showToast("Chat marked as resolved.");
+      setActiveAdminSessionId(null); // Close the chat pane
+    } catch (err) {
+      showToast("Failed to resolve chat.", "error");
     }
   };
 
@@ -188,6 +238,13 @@ export default function App() {
       showToast("Invalid passcode.", "error");
     }
   };
+
+  // Filter the queue for display
+  const displayedSessions = agentSessions.filter(session => {
+    if (queueFilter === 'active') return session.status === 'waiting' || session.status === 'active';
+    if (queueFilter === 'resolved') return session.status === 'resolved';
+    return true;
+  });
 
   return (
     <div className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">
@@ -208,7 +265,6 @@ export default function App() {
       <div className="w-full lg:w-[55%] h-full flex flex-col border-r border-slate-800 bg-slate-900 relative">
         
         {!isAuthenticated ? (
-          // LOGIN SCREEN
           <div className="absolute inset-0 z-10 bg-slate-900 flex flex-col items-center justify-center p-6">
             <div className="w-full max-w-sm bg-slate-950 border border-slate-800 rounded-2xl p-8 shadow-2xl">
               <div className="w-12 h-12 bg-blue-500/10 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
@@ -228,7 +284,6 @@ export default function App() {
             </div>
           </div>
         ) : (
-          // DASHBOARD
           <>
             <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -242,7 +297,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Agent Selector */}
             <div className="p-4 border-b border-slate-800 bg-slate-950">
               <div className="flex gap-2 max-w-md">
                 {agents.map(agent => (
@@ -258,32 +312,51 @@ export default function App() {
               </div>
             </div>
 
-            {/* TWO-COLUMN INBOX LAYOUT */}
             <div className="flex-1 flex overflow-hidden">
               
               {/* Left Column: Session List */}
-              <div className="w-2/5 border-r border-slate-800 bg-slate-900 overflow-y-auto">
-                {agentSessions.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-slate-500 mt-10">No active chats in the queue.</div>
-                ) : (
-                  agentSessions.map(session => (
-                    <button
-                      key={session.id}
-                      onClick={() => setActiveAdminSessionId(session.id)}
-                      className={`w-full text-left p-4 border-b border-slate-800 transition hover:bg-slate-800 ${activeAdminSessionId === session.id ? 'bg-slate-800 border-l-2 border-l-blue-500' : ''}`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-mono text-slate-300">#{session.id.substring(5, 11)}</span>
-                        {session.status === 'waiting' && <span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span></span>}
-                        {session.status === 'active' && <Circle className="h-2 w-2 fill-emerald-500 text-emerald-500" />}
-                      </div>
-                      <p className="text-xs text-slate-400 truncate">{session.lastMessage || 'Started chat...'}</p>
-                      {session.assignedAgent && (
-                        <p className="text-[9px] text-slate-500 mt-2">Handled by: {session.assignedAgent.name}</p>
-                      )}
-                    </button>
-                  ))
-                )}
+              <div className="w-2/5 border-r border-slate-800 bg-slate-900 flex flex-col">
+                
+                {/* NEW: QUEUE FILTER TOGGLES */}
+                <div className="flex border-b border-slate-800 bg-slate-950 shrink-0">
+                  <button 
+                    onClick={() => setQueueFilter('active')}
+                    className={`flex-1 py-2 text-xs font-medium border-b-2 transition ${queueFilter === 'active' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Waiting & Active
+                  </button>
+                  <button 
+                    onClick={() => setQueueFilter('resolved')}
+                    className={`flex-1 py-2 text-xs font-medium border-b-2 transition ${queueFilter === 'resolved' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Resolved
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto">
+                  {displayedSessions.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-500 mt-10">No {queueFilter} chats in the queue.</div>
+                  ) : (
+                    displayedSessions.map(session => (
+                      <button
+                        key={session.id}
+                        onClick={() => setActiveAdminSessionId(session.id)}
+                        className={`w-full text-left p-4 border-b border-slate-800 transition hover:bg-slate-800 ${activeAdminSessionId === session.id ? 'bg-slate-800 border-l-2 border-l-blue-500' : ''}`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-mono text-slate-300">#{session.id.substring(5, 11)}</span>
+                          {session.status === 'waiting' && <span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span></span>}
+                          {session.status === 'active' && <Circle className="h-2 w-2 fill-emerald-500 text-emerald-500" />}
+                          {session.status === 'resolved' && <CheckCircle2 className="h-3 w-3 text-slate-500" />}
+                        </div>
+                        <p className="text-xs text-slate-400 truncate">{session.lastMessage || 'Started chat...'}</p>
+                        {session.assignedAgent && (
+                          <p className="text-[9px] text-slate-500 mt-2">Handled by: {session.assignedAgent.name}</p>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
               </div>
 
               {/* Right Column: Active Chat View */}
@@ -297,6 +370,15 @@ export default function App() {
                   <>
                     <div className="p-3 bg-slate-900 border-b border-slate-800 flex justify-between items-center shrink-0">
                       <span className="text-xs font-semibold text-slate-200">Chat Session: #{activeAdminSessionId.substring(5, 11)}</span>
+                      
+                      {/* NEW: RESOLVE CHAT BUTTON */}
+                      <button 
+                        onClick={handleResolveSession}
+                        className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-emerald-900/50 hover:text-emerald-400 text-slate-300 px-3 py-1.5 rounded transition border border-slate-700 hover:border-emerald-800"
+                        title="Mark session as resolved"
+                      >
+                        <Archive className="h-3 w-3" /> Resolve
+                      </button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -351,7 +433,6 @@ export default function App() {
               <div className="flex items-center justify-center gap-2">
                 {customerSessionId && <span className="text-xs font-mono bg-slate-200 text-slate-600 px-2 py-1 rounded">Your ID: #{customerSessionId.substring(5, 11)}</span>}
                 
-                {/* NEW RESET BUTTON */}
                 <button 
                   onClick={handleResetSession}
                   className="flex items-center gap-1 text-[10px] bg-rose-100 text-rose-600 hover:bg-rose-200 px-2 py-1.5 rounded transition font-medium"
