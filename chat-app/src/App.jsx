@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 
 // === FIREBASE IMPORTS ===
-import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from './firebase';
 
 export default function App() {
@@ -51,10 +51,8 @@ export default function App() {
   // 1. CUSTOMER LOGIC: Initialize Session
   // ==========================================
   useEffect(() => {
-    // Check if customer already has a chat session saved in their browser
     let sid = localStorage.getItem('acme_chat_session');
     if (!sid) {
-      // Generate a new one if they don't
       sid = 'sess_' + Math.random().toString(36).substring(2, 10);
       localStorage.setItem('acme_chat_session', sid);
     }
@@ -116,19 +114,19 @@ export default function App() {
     setUserInput('');
 
     try {
-      // 1. Update/Create the session document (for the agent inbox to see)
+      // 1. Update/Create the session document
       const sessionRef = doc(db, 'sessions', customerSessionId);
       await setDoc(sessionRef, {
-        status: 'waiting', // Flags this for agents as needing attention
+        status: 'waiting', 
         lastMessage: text,
-        updatedAt: serverTimestamp()
+        updatedAt: Date.now() // Swapped to Date.now() for instant rendering
       }, { merge: true });
 
-      // 2. Add the actual message to the sub-collection
+      // 2. Add the actual message
       await addDoc(collection(db, `sessions/${customerSessionId}/messages`), {
         text: text,
         sender: 'user',
-        createdAt: serverTimestamp(),
+        createdAt: Date.now(), // Swapped to Date.now() for instant rendering
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
     } catch (err) {
@@ -151,7 +149,7 @@ export default function App() {
         status: 'active',
         assignedAgent: activeAgent,
         lastMessage: `Agent: ${text}`,
-        updatedAt: serverTimestamp()
+        updatedAt: Date.now() // Swapped to Date.now() for instant rendering
       });
 
       // 2. Send message
@@ -159,7 +157,7 @@ export default function App() {
         text: text,
         sender: 'agent',
         agentDetails: activeAgent,
-        createdAt: serverTimestamp(),
+        createdAt: Date.now(), // Swapped to Date.now() for instant rendering
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
     } catch (err) {
@@ -376,12 +374,14 @@ export default function App() {
                   </div>
 
                   <form onSubmit={handleCustomerSend} className="p-3 border-t bg-white flex gap-2 shrink-0">
-<input 
-  type="text" value={userInput} onChange={(e) => setUserInput(e.target.value)}
-  placeholder="Type your message..."
-  style={{ color: '#0f172a' }} 
-  className="flex-1 bg-white text-xs px-3 py-2 rounded border border-slate-200 focus:outline-none focus:border-blue-500"
-/>
+                    <input 
+                      type="text" 
+                      value={userInput} 
+                      onChange={(e) => setUserInput(e.target.value)}
+                      placeholder="Type your message..."
+                      style={{ WebkitTextFillColor: '#000000', backgroundColor: '#f8fafc' }}
+                      className="flex-1 text-black text-xs px-3 py-2 rounded border border-slate-300 focus:outline-none focus:border-blue-500"
+                    />
                     <button type="submit" style={{ backgroundColor: config.primaryColor }} className="p-2 rounded text-white"><Send className="h-4 w-4" /></button>
                   </form>
                 </div>
