@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Settings, Code, Send, X, Laptop, Smartphone, User, 
-  Copy, Check, Activity, Bell, ShieldAlert, CheckCheck, Clock, Lock, Key, Inbox, Circle
+  Copy, Check, Activity, Bell, ShieldAlert, CheckCheck, Clock, Lock, Key, Inbox, Circle, RotateCcw
 } from 'lucide-react';
 
 // === FIREBASE IMPORTS ===
@@ -59,12 +59,20 @@ export default function App() {
     setCustomerSessionId(sid);
   }, []);
 
-  // Listen to Customer's specific message feed
+  // TEST FUNCTION: Clear local storage to start a fresh chat
+  const handleResetSession = () => {
+    localStorage.removeItem('acme_chat_session');
+    window.location.reload();
+  };
+
+  // Listen to Customer's specific message feed (FIXED: Local Sorting)
   useEffect(() => {
     if (!customerSessionId) return;
-    const q = query(collection(db, `sessions/${customerSessionId}/messages`), orderBy('createdAt', 'asc'));
+    const q = query(collection(db, `sessions/${customerSessionId}/messages`)); // Removed strict orderBy
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setCustomerMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      let fetchedMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      fetchedMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); // Sort locally
+      setCustomerMessages(fetchedMsgs);
       setTimeout(() => customerMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     });
     return () => unsubscribe();
@@ -84,12 +92,14 @@ export default function App() {
     return () => unsubscribe();
   }, [isAuthenticated]);
 
-  // Listen to messages for the specific chat the agent clicked on
+  // Listen to messages for the specific chat the agent clicked on (FIXED: Local Sorting)
   useEffect(() => {
     if (!activeAdminSessionId) return;
-    const q = query(collection(db, `sessions/${activeAdminSessionId}/messages`), orderBy('createdAt', 'asc'));
+    const q = query(collection(db, `sessions/${activeAdminSessionId}/messages`)); // Removed strict orderBy
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setAdminMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      let fetchedMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      fetchedMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); // Sort locally
+      setAdminMessages(fetchedMsgs);
       setTimeout(() => adminMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     });
     return () => unsubscribe();
@@ -119,14 +129,14 @@ export default function App() {
       await setDoc(sessionRef, {
         status: 'waiting', 
         lastMessage: text,
-        updatedAt: Date.now() // Swapped to Date.now() for instant rendering
+        updatedAt: Date.now() 
       }, { merge: true });
 
       // 2. Add the actual message
       await addDoc(collection(db, `sessions/${customerSessionId}/messages`), {
         text: text,
         sender: 'user',
-        createdAt: Date.now(), // Swapped to Date.now() for instant rendering
+        createdAt: Date.now(),
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
     } catch (err) {
@@ -149,7 +159,7 @@ export default function App() {
         status: 'active',
         assignedAgent: activeAgent,
         lastMessage: `Agent: ${text}`,
-        updatedAt: Date.now() // Swapped to Date.now() for instant rendering
+        updatedAt: Date.now() 
       });
 
       // 2. Send message
@@ -157,7 +167,7 @@ export default function App() {
         text: text,
         sender: 'agent',
         agentDetails: activeAgent,
-        createdAt: Date.now(), // Swapped to Date.now() for instant rendering
+        createdAt: Date.now(), 
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
     } catch (err) {
@@ -337,7 +347,19 @@ export default function App() {
             <div className="flex-1 p-10 text-center">
               <h2 className="text-3xl font-black text-slate-800 mb-4">Your Business Website</h2>
               <p className="text-slate-500 max-w-md mx-auto mb-4">Type a message below. It will automatically generate your unique Customer ID and place you in the Agent Queue on the left!</p>
-              {customerSessionId && <span className="text-xs font-mono bg-slate-200 text-slate-600 px-2 py-1 rounded">Your ID: #{customerSessionId.substring(5, 11)}</span>}
+              
+              <div className="flex items-center justify-center gap-2">
+                {customerSessionId && <span className="text-xs font-mono bg-slate-200 text-slate-600 px-2 py-1 rounded">Your ID: #{customerSessionId.substring(5, 11)}</span>}
+                
+                {/* NEW RESET BUTTON */}
+                <button 
+                  onClick={handleResetSession}
+                  className="flex items-center gap-1 text-[10px] bg-rose-100 text-rose-600 hover:bg-rose-200 px-2 py-1.5 rounded transition font-medium"
+                  title="Clear Local Storage to test a fresh chat"
+                >
+                  <RotateCcw className="h-3 w-3" /> Start Fresh Session
+                </button>
+              </div>
             </div>
 
             <div className="absolute right-6 bottom-6 z-40">
@@ -379,8 +401,8 @@ export default function App() {
                       value={userInput} 
                       onChange={(e) => setUserInput(e.target.value)}
                       placeholder="Type your message..."
-                      style={{ WebkitTextFillColor: '#000000', backgroundColor: '#f8fafc' }}
-                      className="flex-1 text-black text-xs px-3 py-2 rounded border border-slate-300 focus:outline-none focus:border-blue-500"
+                      style={{ color: '#0f172a', backgroundColor: '#f8fafc' }}
+                      className="flex-1 bg-white text-xs px-3 py-2 rounded border border-slate-300 focus:outline-none focus:border-blue-500"
                     />
                     <button type="submit" style={{ backgroundColor: config.primaryColor }} className="p-2 rounded text-white"><Send className="h-4 w-4" /></button>
                   </form>
