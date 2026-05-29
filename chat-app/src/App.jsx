@@ -44,7 +44,7 @@ export default function App() {
   const customerMessagesEndRef = useRef(null);
   const adminMessagesEndRef = useRef(null);
 
-  const config = { title: 'Acme Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
+  const config = { title: 'Niagara Travels Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
 
   const playNotificationSound = () => {
     try {
