@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Send, X, Laptop, Smartphone, 
   Activity, ShieldAlert, CheckCheck, Lock, Inbox, Circle, RotateCcw,
-  CheckCircle2, Archive
+  CheckCircle2, Archive, User, Mail
 } from 'lucide-react';
 
 import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
@@ -18,6 +18,11 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [queueFilter, setQueueFilter] = useState('active'); 
   const prevWaitingCountRef = useRef(0);
+
+  // === NEW: CUSTOMER LEAD INFO ===
+  const [isChatStarted, setIsChatStarted] = useState(false);
+  const [customerName, setCustomerName] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
 
   const agents = [
     { id: 'a1', name: 'Sarah', dept: 'Technical Support', color: '#10b981' }, 
@@ -61,13 +66,54 @@ export default function App() {
     } catch (e) { console.warn("Audio play blocked."); }
   };
 
+  // === NEW: INITIALIZE SESSION FROM LOCAL STORAGE ===
   useEffect(() => {
-    let sid = localStorage.getItem('acme_chat_session');
-    if (!sid) { sid = 'sess_' + Math.random().toString(36).substring(2, 10); localStorage.setItem('acme_chat_session', sid); }
-    setCustomerSessionId(sid);
+    const savedEmail = localStorage.getItem('acme_chat_email');
+    const savedName = localStorage.getItem('acme_chat_name');
+    
+    if (savedEmail) {
+      setCustomerEmail(savedEmail);
+      setCustomerName(savedName || 'Guest');
+      setCustomerSessionId(savedEmail); // Email acts as the unique session ID!
+      setIsChatStarted(true);
+    }
   }, []);
 
-  const handleResetSession = () => { localStorage.removeItem('acme_chat_session'); window.location.reload(); };
+  const handleResetSession = () => { 
+    localStorage.removeItem('acme_chat_email'); 
+    localStorage.removeItem('acme_chat_name'); 
+    window.location.reload(); 
+  };
+
+  // === NEW: START CHAT (LEAD CAPTURE) ===
+  const handleStartChat = async (e) => {
+    e.preventDefault();
+    if (!customerName.trim() || !customerEmail.trim()) return;
+
+    const emailId = customerEmail.toLowerCase().trim();
+    
+    // Save to local storage for persistence
+    localStorage.setItem('acme_chat_email', emailId);
+    localStorage.setItem('acme_chat_name', customerName.trim());
+    
+    setCustomerSessionId(emailId);
+    setIsChatStarted(true);
+
+    try {
+      // Create or update the session document with their details
+      const sessionRef = doc(db, 'sessions', emailId);
+      await setDoc(sessionRef, { 
+        customerName: customerName.trim(),
+        customerEmail: emailId,
+        status: 'waiting', 
+        updatedAt: Date.now(),
+        // If it's a new chat, add an initial generic message so it shows in the queue
+        lastMessage: "Started a new chat session."
+      }, { merge: true });
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   useEffect(() => {
     if (!customerSessionId) return;
@@ -149,41 +195,110 @@ export default function App() {
 
   const displayedSessions = agentSessions.filter(s => queueFilter === 'active' ? (s.status === 'waiting' || s.status === 'active') : s.status === 'resolved');
 
+  // ==========================================
+  // EMBED MODE RENDER: ONLY SHOW THE WIDGET
+  // ==========================================
   if (isWidgetMode) {
     return (
       <div className="w-screen h-screen flex flex-col justify-end items-end p-4 bg-transparent font-sans overflow-hidden">
         {isWidgetOpen ? (
           <div className="w-full max-w-[340px] h-[500px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden mb-4 animate-in slide-in-from-bottom-4">
-            <div style={{ backgroundColor: config.primaryColor }} className="p-4 text-white flex justify-between items-center shrink-0 z-10">
-              <div><h4 className="font-bold text-sm">{config.title}</h4><span className="text-[10px] text-white/90">{config.subtitle}</span></div>
-              <button onClick={() => setIsWidgetOpen(false)}><X className="h-5 w-5" /></button>
+            
+            <div style={{ backgroundColor: config.primaryColor }} className="p-4 text-white flex justify-between items-center shrink-0 z-10 shadow-md">
+              <div><h4 className="font-bold text-sm tracking-wide">{config.title}</h4><span className="text-[10px] text-white/90">{config.subtitle}</span></div>
+              <button onClick={() => setIsWidgetOpen(false)} className="hover:bg-black/10 p-1 rounded-full transition"><X className="h-5 w-5" /></button>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
-              {customerMessages.map((m) => (
-                <div key={m.id} className={`flex gap-2 max-w-[88%] ${m.sender === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}>
-                  {m.sender === 'agent' && <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow-sm mt-auto" style={{ backgroundColor: m.agentDetails?.color }}>{m.agentDetails?.name?.charAt(0)}</div>}
-                  <div className={`p-3 text-sm shadow-sm ${m.sender === 'user' ? 'bg-blue-600 text-white rounded-2xl rounded-br-sm' : 'bg-white border text-slate-800 rounded-2xl'}`}>{m.text}</div>
+
+            {!isChatStarted ? (
+              // --- LEAD CAPTURE FORM ---
+              <div className="flex-1 overflow-y-auto p-6 bg-slate-50 flex flex-col justify-center">
+                <div className="text-center mb-6">
+                  <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <MessageSquare className="w-6 h-6" />
+                  </div>
+                  <h3 className="font-bold text-slate-800 text-lg">Welcome!</h3>
+                  <p className="text-xs text-slate-500 mt-1">Please enter your details to start chatting with an agent, or to resume a previous chat.</p>
                 </div>
-              ))}
-              <div ref={customerMessagesEndRef} />
-            </div>
-            <form onSubmit={handleCustomerSend} className="p-3 border-t bg-white flex gap-2 shrink-0">
-              <input type="text" value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="Type..." style={{ color: '#000', backgroundColor: '#fff' }} className="flex-1 text-sm px-4 py-2 rounded-full border border-slate-200 focus:outline-none focus:border-blue-500" />
-              <button type="submit" style={{ backgroundColor: config.primaryColor }} className="h-10 w-10 rounded-full text-white flex items-center justify-center"><Send className="h-4 w-4" /></button>
-            </form>
+
+                <form onSubmit={handleStartChat} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Your Name</label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input 
+                        type="text" required value={customerName} onChange={(e) => setCustomerName(e.target.value)} 
+                        placeholder="John Doe" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}
+                        className="w-full pl-9 pr-4 py-2.5 text-sm rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" 
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input 
+                        type="email" required value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} 
+                        placeholder="john@example.com" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}
+                        className="w-full pl-9 pr-4 py-2.5 text-sm rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" 
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" style={{ backgroundColor: config.primaryColor }} className="w-full py-3 rounded-xl text-white font-bold text-sm shadow-md hover:opacity-90 transition mt-2">
+                    Start Chat
+                  </button>
+                </form>
+              </div>
+            ) : (
+              // --- ACTUAL CHAT FEED ---
+              <>
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50 relative">
+                  {customerMessages.length === 0 && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center opacity-60">
+                      <MessageSquare className="h-10 w-10 text-slate-400 mb-3" />
+                      <p className="text-xs text-slate-500">Have a question? Send us a message and an agent will be with you shortly.</p>
+                    </div>
+                  )}
+                  {customerMessages.map((m) => (
+                    <div key={m.id} className={`flex gap-2 max-w-[88%] ${m.sender === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}>
+                      {m.sender === 'agent' && <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow-sm mt-auto mb-1" style={{ backgroundColor: m.agentDetails?.color }}>{m.agentDetails?.name?.charAt(0)}</div>}
+                      <div>
+                        {m.sender === 'agent' && <span className="text-[10px] text-slate-500 ml-1 mb-1 block font-medium">{m.agentDetails?.name}</span>}
+                        <div className={`p-3 text-sm shadow-sm ${m.sender === 'user' ? 'bg-blue-600 text-white rounded-2xl rounded-br-sm' : 'bg-white border border-slate-100 text-slate-800 rounded-2xl rounded-bl-sm'}`}>{m.text}</div>
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={customerMessagesEndRef} />
+                </div>
+                
+                {/* Reset Session Option */}
+                <div className="bg-slate-50 px-4 pb-2 flex justify-between items-center">
+                  <span className="text-[9px] text-slate-400">Logged in as {customerEmail}</span>
+                  <button onClick={handleResetSession} className="text-[9px] text-rose-500 hover:underline">Sign Out</button>
+                </div>
+
+                <form onSubmit={handleCustomerSend} className="p-3 border-t bg-white flex gap-2 shrink-0">
+                  <input type="text" value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="Type a message..." style={{ color: '#0f172a', backgroundColor: '#f8fafc' }} className="flex-1 text-sm px-4 py-2.5 rounded-full border border-slate-200 focus:outline-none focus:border-blue-500" />
+                  <button type="submit" style={{ backgroundColor: config.primaryColor }} className="h-10 w-10 rounded-full text-white flex items-center justify-center shadow-md hover:scale-105 transition-transform"><Send className="h-4 w-4 ml-0.5" /></button>
+                </form>
+              </>
+            )}
           </div>
         ) : (
-          <button onClick={() => setIsWidgetOpen(true)} style={{ backgroundColor: config.primaryColor }} className="w-16 h-16 rounded-full text-white shadow-xl flex items-center justify-center hover:scale-105 transition"><MessageSquare /></button>
+          <button onClick={() => setIsWidgetOpen(true)} style={{ backgroundColor: config.primaryColor }} className="w-16 h-16 rounded-full text-white shadow-[0_8px_30px_rgb(0,0,0,0.2)] flex items-center justify-center hover:scale-105 transition-transform relative group">
+            <MessageSquare className="h-7 w-7 group-hover:hidden" />
+            <Activity className="h-7 w-7 hidden group-hover:block" />
+          </button>
         )}
       </div>
     );
   }
 
-  // --- FULL DASHBOARD RENDER ---
+  // ==========================================
+  // FULL DASHBOARD RENDER 
+  // ==========================================
   return (
     <div className="flex h-screen w-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
       
-      {/* Toast Notifications */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
         {notifications.map((notif) => (
           <div key={notif.id} className="p-3 rounded-lg shadow-xl border flex items-center gap-3 bg-slate-900 border-slate-700 text-sm">
@@ -216,7 +331,6 @@ export default function App() {
       ) : (
         <div className="w-full h-full flex flex-col relative">
             
-            {/* Header */}
             <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-blue-600/20 text-blue-400">
@@ -229,7 +343,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Agent Selector */}
             <div className="p-4 border-b border-slate-800 bg-slate-950">
               <div className="flex gap-2 max-w-md">
                 {agents.map(agent => (
@@ -245,10 +358,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Two-Column Layout */}
             <div className="flex-1 flex overflow-hidden">
               
-              {/* Left Sidebar */}
               <div className="w-1/3 md:w-80 border-r border-slate-800 bg-slate-900 flex flex-col shrink-0">
                 <div className="flex border-b border-slate-800 bg-slate-950 shrink-0">
                   <button 
@@ -276,12 +387,25 @@ export default function App() {
                         className={`w-full text-left p-4 border-b border-slate-800 transition hover:bg-slate-800 ${activeAdminSessionId === session.id ? 'bg-slate-800 border-l-2 border-l-blue-500' : ''}`}
                       >
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-mono text-slate-300">#{session.id.substring(5, 11)}</span>
+                          {/* NEW: Displays the Customer's Real Name instead of random ID */}
+                          <span className="text-sm font-bold text-white truncate max-w-[150px]">
+                            {session.customerName || session.id}
+                          </span>
+                          
                           {session.status === 'waiting' && <span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span></span>}
                           {session.status === 'active' && <Circle className="h-2 w-2 fill-emerald-500 text-emerald-500" />}
                           {session.status === 'resolved' && <CheckCircle2 className="h-3 w-3 text-slate-500" />}
                         </div>
-                        <p className="text-xs text-slate-400 truncate">{session.lastMessage || 'Started chat...'}</p>
+                        
+                        {/* NEW: Displays the Customer's Email */}
+                        <p className="text-[10px] text-slate-400 mb-2 truncate font-mono">
+                          {session.customerEmail || 'Guest User'}
+                        </p>
+
+                        <p className="text-xs text-slate-300 truncate bg-slate-950 p-2 rounded-lg border border-slate-800">
+                          {session.lastMessage || 'Started chat...'}
+                        </p>
+
                         {session.assignedAgent && (
                           <p className="text-[9px] text-slate-500 mt-2">Handled by: {session.assignedAgent.name}</p>
                         )}
@@ -291,7 +415,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right Chat Area */}
               <div className="flex-1 bg-slate-950 flex flex-col relative min-w-0">
                 {!activeAdminSessionId ? (
                   <div className="m-auto text-center text-slate-500 flex flex-col items-center gap-2">
@@ -301,7 +424,9 @@ export default function App() {
                 ) : (
                   <>
                     <div className="p-4 bg-slate-900 border-b border-slate-800 flex justify-between items-center shrink-0">
-                      <span className="text-xs font-semibold text-slate-200">Chat Session: #{activeAdminSessionId.substring(5, 11)}</span>
+                      <span className="text-xs font-semibold text-slate-200">
+                        Chatting with: <span className="text-blue-400">{agentSessions.find(s => s.id === activeAdminSessionId)?.customerName || activeAdminSessionId}</span>
+                      </span>
                       <button 
                         onClick={handleResolveSession}
                         className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-emerald-900/50 hover:text-emerald-400 text-slate-300 px-3 py-1.5 rounded transition border border-slate-700 hover:border-emerald-800"
@@ -315,7 +440,7 @@ export default function App() {
                       {adminMessages.map((m) => (
                         <div key={m.id} className={`flex flex-col max-w-[85%] ${m.sender === 'user' ? 'mr-auto items-start' : 'ml-auto items-end'}`}>
                           <span className="text-[10px] text-slate-500 mb-1 font-medium">
-                            {m.sender === 'user' ? 'Client' : `${m.agentDetails?.name}`}
+                            {m.sender === 'user' ? (agentSessions.find(s => s.id === activeAdminSessionId)?.customerName || 'Client') : `${m.agentDetails?.name}`}
                           </span>
                           <div className={`p-3 rounded-xl text-sm ${m.sender === 'user' ? 'bg-slate-800 text-slate-200' : 'bg-blue-900/40 text-blue-100 border border-blue-800'}`}>
                             {m.text}
