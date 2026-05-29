@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Send, X, Laptop, Smartphone, 
   Activity, ShieldAlert, CheckCheck, Lock, Inbox, Circle, RotateCcw,
-  CheckCircle2, Archive, User, Mail
+  CheckCircle2, Archive, User, Mail, Plus
 } from 'lucide-react';
 
 import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
@@ -16,23 +16,28 @@ export default function App() {
   const [loginError, setLoginError] = useState(false);
   const [isWidgetOpen, setIsWidgetOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
-  
-  // === NEW: VIEW & FILTER STATES ===
   const [queueFilter, setQueueFilter] = useState('active'); 
-  const [viewMode, setViewMode] = useState('all'); // 'all' or specific agent ID
+  const [viewMode, setViewMode] = useState('all'); 
   const prevWaitingCountRef = useRef(0);
 
   const [isChatStarted, setIsChatStarted] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
 
-  const agents = [
-    { id: 'a1', name: 'Sarah', dept: 'Technical Support', color: '#10b981' }, 
-    { id: 'a2', name: 'Marcus', dept: 'Billing & Sales', color: '#f59e0b' },   
-    { id: 'a3', name: 'Chloe', dept: 'Customer Success', color: '#8b5cf6' }    
-  ];
-  const [activeAgentId, setActiveAgentId] = useState(agents[0].id);
-  const activeAgent = agents.find(a => a.id === activeAgentId);
+  // === NEW: DYNAMIC AGENTS STATE ===
+  const [newAgentName, setNewAgentName] = useState('');
+  const [agents, setAgents] = useState(() => {
+    const savedAgents = localStorage.getItem('acme_agents_list');
+    if (savedAgents) return JSON.parse(savedAgents);
+    return [
+      { id: 'a1', name: 'Sarah', dept: 'Technical Support', color: '#10b981' }, 
+      { id: 'a2', name: 'Marcus', dept: 'Billing & Sales', color: '#f59e0b' },   
+      { id: 'a3', name: 'Chloe', dept: 'Customer Success', color: '#8b5cf6' }
+    ];
+  });
+
+  const [activeAgentId, setActiveAgentId] = useState(agents[0]?.id || 'a1');
+  const activeAgent = agents.find(a => a.id === activeAgentId) || agents[0];
 
   const [customerSessionId, setCustomerSessionId] = useState(null);
   const [customerMessages, setCustomerMessages] = useState([]);
@@ -46,7 +51,29 @@ export default function App() {
   const customerMessagesEndRef = useRef(null);
   const adminMessagesEndRef = useRef(null);
 
-  const config = { title: 'Niagara Travels Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
+  const config = { title: 'Acme Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
+
+  // === NEW: ADD AGENT FUNCTION ===
+  const handleAddAgent = (e) => {
+    e.preventDefault();
+    if (!newAgentName.trim()) return;
+    
+    // Array of nice colors to cycle through for new agents
+    const colors = ['#ef4444', '#06b6d4', '#d946ef', '#f43f5e', '#84cc16', '#eab308', '#6366f1'];
+    
+    const newAgent = {
+      id: 'a' + Date.now(),
+      name: newAgentName.trim(),
+      dept: 'Support',
+      color: colors[agents.length % colors.length]
+    };
+    
+    const updatedAgents = [...agents, newAgent];
+    setAgents(updatedAgents);
+    localStorage.setItem('acme_agents_list', JSON.stringify(updatedAgents));
+    setNewAgentName('');
+    showToast(`Added agent: ${newAgent.name}`);
+  };
 
   const playNotificationSound = () => {
     try {
@@ -71,7 +98,6 @@ export default function App() {
   useEffect(() => {
     const savedEmail = localStorage.getItem('acme_chat_email');
     const savedName = localStorage.getItem('acme_chat_name');
-    
     if (savedEmail) {
       setCustomerEmail(savedEmail);
       setCustomerName(savedName || 'Guest');
@@ -189,20 +215,12 @@ export default function App() {
     if (passwordInput === 'admin123') { setIsAuthenticated(true); } else { setLoginError(true); showToast("Invalid passcode.", "error"); }
   };
 
-  // === NEW: FILTER LOGIC APPLIED TO SESSIONS ===
   const displayedSessions = agentSessions.filter(s => {
-    // 1. Status Filter (Active vs Resolved)
-    const statusMatch = queueFilter === 'active' 
-      ? (s.status === 'waiting' || s.status === 'active') 
-      : s.status === 'resolved';
-
-    // 2. Agent / View Mode Filter
+    const statusMatch = queueFilter === 'active' ? (s.status === 'waiting' || s.status === 'active') : s.status === 'resolved';
     let agentMatch = true;
     if (viewMode !== 'all') {
-      // If a specific agent is selected, show their assigned chats OR brand new unassigned waiting chats
       agentMatch = (s.assignedAgent && s.assignedAgent.id === viewMode) || (s.status === 'waiting' && !s.assignedAgent);
     }
-    
     return statusMatch && agentMatch;
   });
 
@@ -348,12 +366,12 @@ export default function App() {
               </div>
             </div>
 
-            {/* === NEW: ENHANCED AGENT BAR === */}
-            <div className="p-4 border-b border-slate-800 bg-slate-950">
-              <div className="flex gap-2 max-w-2xl">
+            <div className="p-4 border-b border-slate-800 bg-slate-950 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              {/* Agent Tabs List */}
+              <div className="flex flex-wrap gap-2 flex-1">
                 <button
                   onClick={() => setViewMode('all')}
-                  className={`flex-1 p-2 rounded border text-xs font-medium transition ${viewMode === 'all' ? 'bg-slate-800 border-blue-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
+                  className={`px-4 py-2 rounded border text-xs font-medium transition ${viewMode === 'all' ? 'bg-slate-800 border-blue-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
                   style={{ borderBottomColor: viewMode === 'all' ? '#3b82f6' : '' }}
                 >
                   All Chats
@@ -365,22 +383,38 @@ export default function App() {
                      setViewMode(agent.id); 
                      setActiveAgentId(agent.id); 
                    }}
-                   className={`flex-1 p-2 rounded border text-xs font-medium transition ${viewMode === agent.id ? 'bg-slate-800 border-slate-600 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
+                   className={`px-4 py-2 rounded border text-xs font-medium transition ${viewMode === agent.id ? 'bg-slate-800 border-slate-600 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
                    style={{ borderBottomColor: viewMode === agent.id ? agent.color : '' }}
                  >
                    {agent.name}
                  </button>
                 ))}
               </div>
-              {viewMode === 'all' && (
-                <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1">
+
+              {/* NEW: ADD AGENT FORM */}
+              <form onSubmit={handleAddAgent} className="flex gap-2 shrink-0">
+                 <input 
+                   type="text" 
+                   value={newAgentName} 
+                   onChange={(e) => setNewAgentName(e.target.value)} 
+                   placeholder="New agent name..." 
+                   className="bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded focus:outline-none focus:border-blue-500 w-36"
+                 />
+                 <button type="submit" className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-2 rounded transition flex items-center justify-center" title="Add Agent">
+                    <Plus className="w-4 h-4" />
+                 </button>
+              </form>
+            </div>
+            
+            {viewMode === 'all' && (
+              <div className="px-4 py-2 bg-slate-900/50 border-b border-slate-800 flex items-center gap-1">
+                <p className="text-[10px] text-slate-500 flex items-center gap-1">
                   <Inbox className="w-3 h-3" /> Viewing all queues. Agent replies will be sent as <strong style={{color: activeAgent.color}}>{activeAgent.name}</strong>.
                 </p>
-              )}
-            </div>
+              </div>
+            )}
 
             <div className="flex-1 flex overflow-hidden">
-              
               <div className="w-1/3 md:w-80 border-r border-slate-800 bg-slate-900 flex flex-col shrink-0">
                 <div className="flex border-b border-slate-800 bg-slate-950 shrink-0">
                   <button 
