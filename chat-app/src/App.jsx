@@ -16,10 +16,12 @@ export default function App() {
   const [loginError, setLoginError] = useState(false);
   const [isWidgetOpen, setIsWidgetOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  
+  // === NEW: VIEW & FILTER STATES ===
   const [queueFilter, setQueueFilter] = useState('active'); 
+  const [viewMode, setViewMode] = useState('all'); // 'all' or specific agent ID
   const prevWaitingCountRef = useRef(0);
 
-  // === NEW: CUSTOMER LEAD INFO ===
   const [isChatStarted, setIsChatStarted] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
@@ -44,7 +46,7 @@ export default function App() {
   const customerMessagesEndRef = useRef(null);
   const adminMessagesEndRef = useRef(null);
 
-  const config = { title: 'Niagara Travels Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
+  const config = { title: 'Acme Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
 
   const playNotificationSound = () => {
     try {
@@ -66,7 +68,6 @@ export default function App() {
     } catch (e) { console.warn("Audio play blocked."); }
   };
 
-  // === NEW: INITIALIZE SESSION FROM LOCAL STORAGE ===
   useEffect(() => {
     const savedEmail = localStorage.getItem('acme_chat_email');
     const savedName = localStorage.getItem('acme_chat_name');
@@ -74,7 +75,7 @@ export default function App() {
     if (savedEmail) {
       setCustomerEmail(savedEmail);
       setCustomerName(savedName || 'Guest');
-      setCustomerSessionId(savedEmail); // Email acts as the unique session ID!
+      setCustomerSessionId(savedEmail); 
       setIsChatStarted(true);
     }
   }, []);
@@ -85,14 +86,11 @@ export default function App() {
     window.location.reload(); 
   };
 
-  // === NEW: START CHAT (LEAD CAPTURE) ===
   const handleStartChat = async (e) => {
     e.preventDefault();
     if (!customerName.trim() || !customerEmail.trim()) return;
 
     const emailId = customerEmail.toLowerCase().trim();
-    
-    // Save to local storage for persistence
     localStorage.setItem('acme_chat_email', emailId);
     localStorage.setItem('acme_chat_name', customerName.trim());
     
@@ -100,14 +98,12 @@ export default function App() {
     setIsChatStarted(true);
 
     try {
-      // Create or update the session document with their details
       const sessionRef = doc(db, 'sessions', emailId);
       await setDoc(sessionRef, { 
         customerName: customerName.trim(),
         customerEmail: emailId,
         status: 'waiting', 
         updatedAt: Date.now(),
-        // If it's a new chat, add an initial generic message so it shows in the queue
         lastMessage: "Started a new chat session."
       }, { merge: true });
     } catch (err) {
@@ -193,11 +189,23 @@ export default function App() {
     if (passwordInput === 'admin123') { setIsAuthenticated(true); } else { setLoginError(true); showToast("Invalid passcode.", "error"); }
   };
 
-  const displayedSessions = agentSessions.filter(s => queueFilter === 'active' ? (s.status === 'waiting' || s.status === 'active') : s.status === 'resolved');
+  // === NEW: FILTER LOGIC APPLIED TO SESSIONS ===
+  const displayedSessions = agentSessions.filter(s => {
+    // 1. Status Filter (Active vs Resolved)
+    const statusMatch = queueFilter === 'active' 
+      ? (s.status === 'waiting' || s.status === 'active') 
+      : s.status === 'resolved';
 
-  // ==========================================
-  // EMBED MODE RENDER: ONLY SHOW THE WIDGET
-  // ==========================================
+    // 2. Agent / View Mode Filter
+    let agentMatch = true;
+    if (viewMode !== 'all') {
+      // If a specific agent is selected, show their assigned chats OR brand new unassigned waiting chats
+      agentMatch = (s.assignedAgent && s.assignedAgent.id === viewMode) || (s.status === 'waiting' && !s.assignedAgent);
+    }
+    
+    return statusMatch && agentMatch;
+  });
+
   if (isWidgetMode) {
     return (
       <div className="w-screen h-screen flex flex-col justify-end items-end p-4 bg-transparent font-sans overflow-hidden">
@@ -210,7 +218,6 @@ export default function App() {
             </div>
 
             {!isChatStarted ? (
-              // --- LEAD CAPTURE FORM ---
               <div className="flex-1 overflow-y-auto p-6 bg-slate-50 flex flex-col justify-center">
                 <div className="text-center mb-6">
                   <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -249,7 +256,6 @@ export default function App() {
                 </form>
               </div>
             ) : (
-              // --- ACTUAL CHAT FEED ---
               <>
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50 relative">
                   {customerMessages.length === 0 && (
@@ -270,7 +276,6 @@ export default function App() {
                   <div ref={customerMessagesEndRef} />
                 </div>
                 
-                {/* Reset Session Option */}
                 <div className="bg-slate-50 px-4 pb-2 flex justify-between items-center">
                   <span className="text-[9px] text-slate-400">Logged in as {customerEmail}</span>
                   <button onClick={handleResetSession} className="text-[9px] text-rose-500 hover:underline">Sign Out</button>
@@ -343,19 +348,35 @@ export default function App() {
               </div>
             </div>
 
+            {/* === NEW: ENHANCED AGENT BAR === */}
             <div className="p-4 border-b border-slate-800 bg-slate-950">
-              <div className="flex gap-2 max-w-md">
+              <div className="flex gap-2 max-w-2xl">
+                <button
+                  onClick={() => setViewMode('all')}
+                  className={`flex-1 p-2 rounded border text-xs font-medium transition ${viewMode === 'all' ? 'bg-slate-800 border-blue-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
+                  style={{ borderBottomColor: viewMode === 'all' ? '#3b82f6' : '' }}
+                >
+                  All Chats
+                </button>
                 {agents.map(agent => (
                    <button
                    key={agent.id}
-                   onClick={() => setActiveAgentId(agent.id)}
-                   className={`flex-1 p-2 rounded border text-xs font-medium transition ${activeAgentId === agent.id ? 'bg-slate-800 border-slate-600 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
-                   style={{ borderBottomColor: activeAgentId === agent.id ? agent.color : '' }}
+                   onClick={() => { 
+                     setViewMode(agent.id); 
+                     setActiveAgentId(agent.id); 
+                   }}
+                   className={`flex-1 p-2 rounded border text-xs font-medium transition ${viewMode === agent.id ? 'bg-slate-800 border-slate-600 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
+                   style={{ borderBottomColor: viewMode === agent.id ? agent.color : '' }}
                  >
                    {agent.name}
                  </button>
                 ))}
               </div>
+              {viewMode === 'all' && (
+                <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1">
+                  <Inbox className="w-3 h-3" /> Viewing all queues. Agent replies will be sent as <strong style={{color: activeAgent.color}}>{activeAgent.name}</strong>.
+                </p>
+              )}
             </div>
 
             <div className="flex-1 flex overflow-hidden">
@@ -378,7 +399,7 @@ export default function App() {
 
                 <div className="flex-1 overflow-y-auto">
                   {displayedSessions.length === 0 ? (
-                    <div className="p-6 text-center text-xs text-slate-500 mt-10">No {queueFilter} chats.</div>
+                    <div className="p-6 text-center text-xs text-slate-500 mt-10">No {queueFilter} chats available.</div>
                   ) : (
                     displayedSessions.map(session => (
                       <button
@@ -387,7 +408,6 @@ export default function App() {
                         className={`w-full text-left p-4 border-b border-slate-800 transition hover:bg-slate-800 ${activeAdminSessionId === session.id ? 'bg-slate-800 border-l-2 border-l-blue-500' : ''}`}
                       >
                         <div className="flex items-center justify-between mb-1">
-                          {/* NEW: Displays the Customer's Real Name instead of random ID */}
                           <span className="text-sm font-bold text-white truncate max-w-[150px]">
                             {session.customerName || session.id}
                           </span>
@@ -397,7 +417,6 @@ export default function App() {
                           {session.status === 'resolved' && <CheckCircle2 className="h-3 w-3 text-slate-500" />}
                         </div>
                         
-                        {/* NEW: Displays the Customer's Email */}
                         <p className="text-[10px] text-slate-400 mb-2 truncate font-mono">
                           {session.customerEmail || 'Guest User'}
                         </p>
