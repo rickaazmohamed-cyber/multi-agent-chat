@@ -2,14 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Send, X, Laptop, Smartphone, 
   Activity, ShieldAlert, CheckCheck, Lock, Inbox, Circle, RotateCcw,
-  CheckCircle2, Archive, User, Mail, Plus
+  CheckCircle2, Archive, User, Mail, Plus, Globe
 } from 'lucide-react';
 
 import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from './firebase';
 
 export default function App() {
-  const isWidgetMode = new URLSearchParams(window.location.search).get('mode') === 'embed';
+  const searchParams = new URLSearchParams(window.location.search);
+  const isWidgetMode = searchParams.get('mode') === 'embed';
+  // === NEW: CAPTURE THE SITE SOURCE ===
+  const siteSource = searchParams.get('site') || 'Direct Link';
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
@@ -24,7 +27,6 @@ export default function App() {
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
 
-  // === NEW: DYNAMIC AGENTS STATE ===
   const [newAgentName, setNewAgentName] = useState('');
   const [agents, setAgents] = useState(() => {
     const savedAgents = localStorage.getItem('acme_agents_list');
@@ -53,21 +55,16 @@ export default function App() {
 
   const config = { title: 'Acme Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
 
-  // === NEW: ADD AGENT FUNCTION ===
   const handleAddAgent = (e) => {
     e.preventDefault();
     if (!newAgentName.trim()) return;
-    
-    // Array of nice colors to cycle through for new agents
     const colors = ['#ef4444', '#06b6d4', '#d946ef', '#f43f5e', '#84cc16', '#eab308', '#6366f1'];
-    
     const newAgent = {
       id: 'a' + Date.now(),
       name: newAgentName.trim(),
       dept: 'Support',
       color: colors[agents.length % colors.length]
     };
-    
     const updatedAgents = [...agents, newAgent];
     setAgents(updatedAgents);
     localStorage.setItem('acme_agents_list', JSON.stringify(updatedAgents));
@@ -128,6 +125,7 @@ export default function App() {
       await setDoc(sessionRef, { 
         customerName: customerName.trim(),
         customerEmail: emailId,
+        source: siteSource, // === NEW: SAVE SOURCE TO DATABASE ===
         status: 'waiting', 
         updatedAt: Date.now(),
         lastMessage: "Started a new chat session."
@@ -367,7 +365,6 @@ export default function App() {
             </div>
 
             <div className="p-4 border-b border-slate-800 bg-slate-950 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              {/* Agent Tabs List */}
               <div className="flex flex-wrap gap-2 flex-1">
                 <button
                   onClick={() => setViewMode('all')}
@@ -391,7 +388,6 @@ export default function App() {
                 ))}
               </div>
 
-              {/* NEW: ADD AGENT FORM */}
               <form onSubmit={handleAddAgent} className="flex gap-2 shrink-0">
                  <input 
                    type="text" 
@@ -451,9 +447,17 @@ export default function App() {
                           {session.status === 'resolved' && <CheckCircle2 className="h-3 w-3 text-slate-500" />}
                         </div>
                         
-                        <p className="text-[10px] text-slate-400 mb-2 truncate font-mono">
-                          {session.customerEmail || 'Guest User'}
-                        </p>
+                        {/* === NEW: SOURCE BADGE IN QUEUE === */}
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-[10px] text-slate-400 truncate font-mono">
+                            {session.customerEmail || 'Guest User'}
+                          </p>
+                          {session.source && (
+                            <span className="bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider border border-blue-800/50 flex items-center gap-1">
+                              <Globe className="w-2.5 h-2.5" /> {session.source}
+                            </span>
+                          )}
+                        </div>
 
                         <p className="text-xs text-slate-300 truncate bg-slate-950 p-2 rounded-lg border border-slate-800">
                           {session.lastMessage || 'Started chat...'}
@@ -477,9 +481,18 @@ export default function App() {
                 ) : (
                   <>
                     <div className="p-4 bg-slate-900 border-b border-slate-800 flex justify-between items-center shrink-0">
-                      <span className="text-xs font-semibold text-slate-200">
-                        Chatting with: <span className="text-blue-400">{agentSessions.find(s => s.id === activeAdminSessionId)?.customerName || activeAdminSessionId}</span>
-                      </span>
+                      <div className="flex flex-col">
+                        <span className="text-xs font-semibold text-slate-200">
+                          Chatting with: <span className="text-blue-400">{agentSessions.find(s => s.id === activeAdminSessionId)?.customerName || activeAdminSessionId}</span>
+                        </span>
+                        {/* === NEW: SOURCE BADGE IN HEADER === */}
+                        {agentSessions.find(s => s.id === activeAdminSessionId)?.source && (
+                          <span className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
+                            Via <Globe className="w-3 h-3" /> {agentSessions.find(s => s.id === activeAdminSessionId)?.source}
+                          </span>
+                        )}
+                      </div>
+                      
                       <button 
                         onClick={handleResolveSession}
                         className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-emerald-900/50 hover:text-emerald-400 text-slate-300 px-3 py-1.5 rounded transition border border-slate-700 hover:border-emerald-800"
