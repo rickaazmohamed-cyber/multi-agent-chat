@@ -33,10 +33,11 @@ export default function App() {
   const [agents, setAgents] = useState(() => {
     const savedAgents = localStorage.getItem('acme_agents_list');
     if (savedAgents) return JSON.parse(savedAgents);
+    // CHANGE THESE TO YOUR REAL DEFAULT AGENTS:
     return [
-      { id: 'a1', name: 'Sarah', dept: 'Technical Support', color: '#10b981' }, 
-      { id: 'a2', name: 'Marcus', dept: 'Billing & Sales', color: '#f59e0b' },   
-      { id: 'a3', name: 'Chloe', dept: 'Customer Success', color: '#8b5cf6' }
+      { id: 'a1', name: 'Kushan', dept: 'Operations', color: '#10b981' }, 
+      { id: 'a2', name: 'Aamir', dept: 'Support', color: '#f59e0b' },   
+      { id: 'a3', name: 'Rickaaz', dept: 'Admin', color: '#8b5cf6' }
     ];
   });
 
