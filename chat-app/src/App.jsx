@@ -216,15 +216,16 @@ export default function App() {
     if (passwordInput === 'admin123') { setIsAuthenticated(true); } else { setLoginError(true); showToast("Invalid passcode.", "error"); }
   };
 
-  // === NEW: SEARCH FILTER LOGIC APPLIED HERE ===
+  // === NEW: STRICT SEARCH FILTER LOGIC APPLIED HERE ===
   const displayedSessions = agentSessions.filter(s => {
     // 1. Check if the status matches the current tab
     const statusMatch = queueFilter === 'active' ? (s.status === 'waiting' || s.status === 'active') : s.status === 'resolved';
     
-    // 2. Check if the agent matches the current view mode
+    // 2. Check if the agent matches the current view mode (STRICT FILTER)
     let agentMatch = true;
     if (viewMode !== 'all') {
-      agentMatch = (s.assignedAgent && s.assignedAgent.id === viewMode) || (s.status === 'waiting' && !s.assignedAgent);
+      // This now strictly requires the agent ID to match, hiding unassigned chats
+      agentMatch = s.assignedAgent && s.assignedAgent.id === viewMode;
     }
     
     // 3. Check if the search query matches the customer name or email
