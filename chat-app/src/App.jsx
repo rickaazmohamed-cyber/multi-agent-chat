@@ -63,7 +63,7 @@ export default function App() {
   const customerTypingTimeoutRef = useRef(null);
   const adminTypingTimeoutRef = useRef(null);
 
-  const config = { title: 'Acme Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
+  const config = { title: 'Tours Coach Canada', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
 
   const handleAddAgent = (e) => {
     e.preventDefault();
