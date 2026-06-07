@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Send, X, Laptop, Smartphone, 
   Activity, ShieldAlert, CheckCheck, Lock, Inbox, Circle, RotateCcw,
-  CheckCircle2, Archive, User, Mail, Plus, Globe
+  CheckCircle2, Archive, User, Mail, Plus, Globe, Search
 } from 'lucide-react';
 
 import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
@@ -11,7 +11,6 @@ import { db } from './firebase';
 export default function App() {
   const searchParams = new URLSearchParams(window.location.search);
   const isWidgetMode = searchParams.get('mode') === 'embed';
-  // === NEW: CAPTURE THE SITE SOURCE ===
   const siteSource = searchParams.get('site') || 'Direct Link';
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -21,6 +20,10 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [queueFilter, setQueueFilter] = useState('active'); 
   const [viewMode, setViewMode] = useState('all'); 
+  
+  // === NEW: SEARCH STATE ===
+  const [searchQuery, setSearchQuery] = useState('');
+  
   const prevWaitingCountRef = useRef(0);
 
   const [isChatStarted, setIsChatStarted] = useState(false);
@@ -125,7 +128,7 @@ export default function App() {
       await setDoc(sessionRef, { 
         customerName: customerName.trim(),
         customerEmail: emailId,
-        source: siteSource, // === NEW: SAVE SOURCE TO DATABASE ===
+        source: siteSource, 
         status: 'waiting', 
         updatedAt: Date.now(),
         lastMessage: "Started a new chat session."
@@ -213,13 +216,23 @@ export default function App() {
     if (passwordInput === 'admin123') { setIsAuthenticated(true); } else { setLoginError(true); showToast("Invalid passcode.", "error"); }
   };
 
+  // === NEW: SEARCH FILTER LOGIC APPLIED HERE ===
   const displayedSessions = agentSessions.filter(s => {
+    // 1. Check if the status matches the current tab
     const statusMatch = queueFilter === 'active' ? (s.status === 'waiting' || s.status === 'active') : s.status === 'resolved';
+    
+    // 2. Check if the agent matches the current view mode
     let agentMatch = true;
     if (viewMode !== 'all') {
       agentMatch = (s.assignedAgent && s.assignedAgent.id === viewMode) || (s.status === 'waiting' && !s.assignedAgent);
     }
-    return statusMatch && agentMatch;
+    
+    // 3. Check if the search query matches the customer name or email
+    const searchMatch = searchQuery === '' || 
+      (s.customerName && s.customerName.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (s.customerEmail && s.customerEmail.toLowerCase().includes(searchQuery.toLowerCase()));
+
+    return statusMatch && agentMatch && searchMatch;
   });
 
   if (isWidgetMode) {
@@ -412,6 +425,26 @@ export default function App() {
 
             <div className="flex-1 flex overflow-hidden">
               <div className="w-1/3 md:w-80 border-r border-slate-800 bg-slate-900 flex flex-col shrink-0">
+                
+                {/* === NEW: SEARCH BAR === */}
+                <div className="p-3 border-b border-slate-800 bg-slate-900 shrink-0">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <input 
+                      type="text" 
+                      placeholder="Search name or email..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:border-blue-500 placeholder:text-slate-600"
+                    />
+                    {searchQuery && (
+                      <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="flex border-b border-slate-800 bg-slate-950 shrink-0">
                   <button 
                     onClick={() => setQueueFilter('active')}
@@ -429,7 +462,9 @@ export default function App() {
 
                 <div className="flex-1 overflow-y-auto">
                   {displayedSessions.length === 0 ? (
-                    <div className="p-6 text-center text-xs text-slate-500 mt-10">No {queueFilter} chats available.</div>
+                    <div className="p-6 text-center text-xs text-slate-500 mt-10">
+                      {searchQuery ? 'No chats match your search.' : `No ${queueFilter} chats available.`}
+                    </div>
                   ) : (
                     displayedSessions.map(session => (
                       <button
@@ -447,7 +482,6 @@ export default function App() {
                           {session.status === 'resolved' && <CheckCircle2 className="h-3 w-3 text-slate-500" />}
                         </div>
                         
-                        {/* === NEW: SOURCE BADGE IN QUEUE === */}
                         <div className="flex items-center justify-between mb-2">
                           <p className="text-[10px] text-slate-400 truncate font-mono">
                             {session.customerEmail || 'Guest User'}
@@ -485,7 +519,6 @@ export default function App() {
                         <span className="text-xs font-semibold text-slate-200">
                           Chatting with: <span className="text-blue-400">{agentSessions.find(s => s.id === activeAdminSessionId)?.customerName || activeAdminSessionId}</span>
                         </span>
-                        {/* === NEW: SOURCE BADGE IN HEADER === */}
                         {agentSessions.find(s => s.id === activeAdminSessionId)?.source && (
                           <span className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
                             Via <Globe className="w-3 h-3" /> {agentSessions.find(s => s.id === activeAdminSessionId)?.source}
