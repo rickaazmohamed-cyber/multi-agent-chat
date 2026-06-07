@@ -5,7 +5,6 @@ import {
   CheckCircle2, Archive, User, Mail, Plus, Globe, Search
 } from 'lucide-react';
 
-// === NEW: Added "increment" to the Firebase imports ===
 import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy, increment } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -33,10 +32,9 @@ export default function App() {
   const [agents, setAgents] = useState(() => {
     const savedAgents = localStorage.getItem('acme_agents_list');
     if (savedAgents) return JSON.parse(savedAgents);
-    // CHANGE THESE TO YOUR REAL DEFAULT AGENTS:
     return [
-      { id: 'a1', name: 'Kushan', dept: 'Operations', color: '#10b981' }, 
-      { id: 'a2', name: 'Aamir', dept: 'Support', color: '#f59e0b' },   
+      { id: 'a1', name: 'Niroshan', dept: 'Operations', color: '#10b981' }, 
+      { id: 'a2', name: 'Manisha', dept: 'Support', color: '#f59e0b' },   
       { id: 'a3', name: 'Rickaaz', dept: 'Admin', color: '#8b5cf6' }
     ];
   });
@@ -48,7 +46,6 @@ export default function App() {
   const [customerMessages, setCustomerMessages] = useState([]);
   const [userInput, setUserInput] = useState('');
   
-  // === NEW: WIDGET SESSION STATE (To track Agent Typing & Unread counts) ===
   const [currentSessionData, setCurrentSessionData] = useState(null);
 
   const [agentSessions, setAgentSessions] = useState([]);
@@ -59,11 +56,22 @@ export default function App() {
   const customerMessagesEndRef = useRef(null);
   const adminMessagesEndRef = useRef(null);
   
-  // === NEW: TYPING INDICATOR TIMEOUT REFS ===
   const customerTypingTimeoutRef = useRef(null);
   const adminTypingTimeoutRef = useRef(null);
 
-  const config = { title: 'Tours Coach Canada', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
+  const config = { 
+    title: 'Tours Coach Canada', 
+    subtitle: 'We typically reply in minutes', 
+    primaryColor: '#2563eb' 
+  };
+
+  // === NEW: TELL THE PARENT WEBSITE IF WIDGET IS OPEN OR CLOSED ===
+  useEffect(() => {
+    if (isWidgetMode) {
+      // Broadcast the open/closed state to the parent window
+      window.parent.postMessage({ type: 'CHAT_WIDGET_STATE', isOpen: isWidgetOpen }, '*');
+    }
+  }, [isWidgetOpen, isWidgetMode]);
 
   const handleAddAgent = (e) => {
     e.preventDefault();
@@ -132,7 +140,6 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  // === NEW: LISTEN TO CURRENT SESSION DOC FOR WIDGET ===
   useEffect(() => {
     if (!customerSessionId || !isWidgetMode) return;
     const unsubscribe = onSnapshot(doc(db, 'sessions', customerSessionId), (docSnap) => {
@@ -141,14 +148,12 @@ export default function App() {
     return () => unsubscribe();
   }, [customerSessionId, isWidgetMode]);
 
-  // === NEW: AUTO-CLEAR UNREAD COUNTER WHEN WIDGET IS OPEN ===
   useEffect(() => {
     if (isWidgetMode && isWidgetOpen && customerSessionId && currentSessionData?.unreadUser > 0) {
       updateDoc(doc(db, 'sessions', customerSessionId), { unreadUser: 0 });
     }
   }, [isWidgetOpen, currentSessionData, customerSessionId, isWidgetMode]);
 
-  // === NEW: AUTO-CLEAR UNREAD COUNTER WHEN ADMIN OPENS CHAT ===
   useEffect(() => {
     if (!isWidgetMode && activeAdminSessionId) {
       const activeSession = agentSessions.find(s => s.id === activeAdminSessionId);
@@ -200,7 +205,6 @@ export default function App() {
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 4000);
   };
 
-  // === NEW: CUSTOMER TYPING HANDLER ===
   const handleCustomerTyping = (e) => {
     setUserInput(e.target.value);
     if (!customerSessionId) return;
@@ -220,13 +224,12 @@ export default function App() {
     try {
       await setDoc(doc(db, 'sessions', customerSessionId), { 
         status: 'waiting', lastMessage: text, updatedAt: Date.now(), 
-        userTyping: false, unreadAdmin: increment(1) // Increment unread for Admin
+        userTyping: false, unreadAdmin: increment(1) 
       }, { merge: true });
       await addDoc(collection(db, `sessions/${customerSessionId}/messages`), { text, sender: 'user', createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
     } catch (err) { showToast("Error.", "error"); }
   };
 
-  // === NEW: ADMIN TYPING HANDLER ===
   const handleAdminTyping = (e) => {
     setAdminReplyText(e.target.value);
     if (!activeAdminSessionId) return;
@@ -246,7 +249,7 @@ export default function App() {
     try {
       await updateDoc(doc(db, 'sessions', activeAdminSessionId), { 
         status: 'active', assignedAgent: activeAgent, lastMessage: `Agent: ${text}`, updatedAt: Date.now(), 
-        agentTyping: false, unreadUser: increment(1) // Increment unread for Customer
+        agentTyping: false, unreadUser: increment(1) 
       });
       await addDoc(collection(db, `sessions/${activeAdminSessionId}/messages`), { text, sender: 'agent', agentDetails: activeAgent, createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
     } catch (err) { showToast("Error.", "error"); }
@@ -341,7 +344,6 @@ export default function App() {
                     </div>
                   ))}
                   
-                  {/* === NEW: AGENT TYPING INDICATOR BUBBLE === */}
                   {currentSessionData?.agentTyping && (
                     <div className="flex gap-2 max-w-[88%] mr-auto">
                       <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow-sm mt-auto mb-1 bg-slate-300">
@@ -374,7 +376,6 @@ export default function App() {
           </div>
         ) : (
           <button onClick={() => setIsWidgetOpen(true)} style={{ backgroundColor: config.primaryColor }} className="w-16 h-16 rounded-full text-white shadow-[0_8px_30px_rgb(0,0,0,0.2)] flex items-center justify-center hover:scale-105 transition-transform relative group">
-            {/* === NEW: UNREAD BADGE ON FLOATING WIDGET === */}
             {currentSessionData?.unreadUser > 0 && (
               <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] font-bold h-5 w-5 flex items-center justify-center rounded-full border-2 border-white">
                 {currentSessionData.unreadUser}
@@ -490,7 +491,6 @@ export default function App() {
                           </span>
                           
                           <div className="flex items-center gap-2">
-                            {/* === NEW: UNREAD BADGE IN QUEUE === */}
                             {session.unreadAdmin > 0 && (
                               <span className="bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                                 {session.unreadAdmin}
@@ -507,7 +507,6 @@ export default function App() {
                           {session.source && (<span className="bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider border border-blue-800/50 flex items-center gap-1"><Globe className="w-2.5 h-2.5" /> {session.source}</span>)}
                         </div>
 
-                        {/* === NEW: TYPING INDICATOR IN QUEUE === */}
                         {session.userTyping ? (
                           <p className="text-xs text-blue-400 italic bg-slate-950 p-2 rounded-lg border border-slate-800">Typing...</p>
                         ) : (
@@ -564,7 +563,6 @@ export default function App() {
                         </div>
                       ))}
                       
-                      {/* === NEW: CUSTOMER TYPING INDICATOR BUBBLE IN DASHBOARD === */}
                       {agentSessions.find(s => s.id === activeAdminSessionId)?.userTyping && (
                          <div className="flex flex-col max-w-[85%] mr-auto items-start">
                            <span className="text-[10px] text-slate-500 mb-1 font-medium italic">
