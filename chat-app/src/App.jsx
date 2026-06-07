@@ -5,7 +5,8 @@ import {
   CheckCircle2, Archive, User, Mail, Plus, Globe, Search
 } from 'lucide-react';
 
-import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+// === NEW: Added "increment" to the Firebase imports ===
+import { collection, doc, setDoc, updateDoc, addDoc, onSnapshot, query, orderBy, increment } from 'firebase/firestore';
 import { db } from './firebase';
 
 export default function App() {
@@ -20,8 +21,6 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [queueFilter, setQueueFilter] = useState('active'); 
   const [viewMode, setViewMode] = useState('all'); 
-  
-  // === NEW: SEARCH STATE ===
   const [searchQuery, setSearchQuery] = useState('');
   
   const prevWaitingCountRef = useRef(0);
@@ -47,6 +46,9 @@ export default function App() {
   const [customerSessionId, setCustomerSessionId] = useState(null);
   const [customerMessages, setCustomerMessages] = useState([]);
   const [userInput, setUserInput] = useState('');
+  
+  // === NEW: WIDGET SESSION STATE (To track Agent Typing & Unread counts) ===
+  const [currentSessionData, setCurrentSessionData] = useState(null);
 
   const [agentSessions, setAgentSessions] = useState([]);
   const [activeAdminSessionId, setActiveAdminSessionId] = useState(null);
@@ -55,6 +57,10 @@ export default function App() {
 
   const customerMessagesEndRef = useRef(null);
   const adminMessagesEndRef = useRef(null);
+  
+  // === NEW: TYPING INDICATOR TIMEOUT REFS ===
+  const customerTypingTimeoutRef = useRef(null);
+  const adminTypingTimeoutRef = useRef(null);
 
   const config = { title: 'Acme Live Support', subtitle: 'We typically reply in minutes', primaryColor: '#2563eb' };
 
@@ -62,12 +68,7 @@ export default function App() {
     e.preventDefault();
     if (!newAgentName.trim()) return;
     const colors = ['#ef4444', '#06b6d4', '#d946ef', '#f43f5e', '#84cc16', '#eab308', '#6366f1'];
-    const newAgent = {
-      id: 'a' + Date.now(),
-      name: newAgentName.trim(),
-      dept: 'Support',
-      color: colors[agents.length % colors.length]
-    };
+    const newAgent = { id: 'a' + Date.now(), name: newAgentName.trim(), dept: 'Support', color: colors[agents.length % colors.length] };
     const updatedAgents = [...agents, newAgent];
     setAgents(updatedAgents);
     localStorage.setItem('acme_agents_list', JSON.stringify(updatedAgents));
@@ -82,16 +83,13 @@ export default function App() {
       const ctx = new AudioContext();
       const osc = ctx.createOscillator();
       const gainNode = ctx.createGain();
-      osc.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.connect(gainNode); gainNode.connect(ctx.destination);
+      osc.type = 'sine'; osc.frequency.setValueAtTime(880, ctx.currentTime);
       osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
       gainNode.gain.setValueAtTime(0, ctx.currentTime);
       gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.05);
       gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2); 
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.25);
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.25);
     } catch (e) { console.warn("Audio play blocked."); }
   };
 
@@ -126,17 +124,38 @@ export default function App() {
     try {
       const sessionRef = doc(db, 'sessions', emailId);
       await setDoc(sessionRef, { 
-        customerName: customerName.trim(),
-        customerEmail: emailId,
-        source: siteSource, 
-        status: 'waiting', 
-        updatedAt: Date.now(),
-        lastMessage: "Started a new chat session."
+        customerName: customerName.trim(), customerEmail: emailId, source: siteSource, 
+        status: 'waiting', updatedAt: Date.now(), lastMessage: "Started a new chat session.",
+        unreadAdmin: 1, unreadUser: 0, userTyping: false, agentTyping: false
       }, { merge: true });
-    } catch (err) {
-      console.error(err);
-    }
+    } catch (err) { console.error(err); }
   };
+
+  // === NEW: LISTEN TO CURRENT SESSION DOC FOR WIDGET ===
+  useEffect(() => {
+    if (!customerSessionId || !isWidgetMode) return;
+    const unsubscribe = onSnapshot(doc(db, 'sessions', customerSessionId), (docSnap) => {
+      if (docSnap.exists()) setCurrentSessionData(docSnap.data());
+    });
+    return () => unsubscribe();
+  }, [customerSessionId, isWidgetMode]);
+
+  // === NEW: AUTO-CLEAR UNREAD COUNTER WHEN WIDGET IS OPEN ===
+  useEffect(() => {
+    if (isWidgetMode && isWidgetOpen && customerSessionId && currentSessionData?.unreadUser > 0) {
+      updateDoc(doc(db, 'sessions', customerSessionId), { unreadUser: 0 });
+    }
+  }, [isWidgetOpen, currentSessionData, customerSessionId, isWidgetMode]);
+
+  // === NEW: AUTO-CLEAR UNREAD COUNTER WHEN ADMIN OPENS CHAT ===
+  useEffect(() => {
+    if (!isWidgetMode && activeAdminSessionId) {
+      const activeSession = agentSessions.find(s => s.id === activeAdminSessionId);
+      if (activeSession && activeSession.unreadAdmin > 0) {
+        updateDoc(doc(db, 'sessions', activeAdminSessionId), { unreadAdmin: 0 });
+      }
+    }
+  }, [activeAdminSessionId, agentSessions, isWidgetMode]);
 
   useEffect(() => {
     if (!customerSessionId) return;
@@ -176,9 +195,19 @@ export default function App() {
   }, [activeAdminSessionId]);
 
   const showToast = (message, type = 'success') => {
-    const id = Date.now();
-    setNotifications(prev => [...prev, { id, message, type }]);
+    const id = Date.now(); setNotifications(prev => [...prev, { id, message, type }]);
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 4000);
+  };
+
+  // === NEW: CUSTOMER TYPING HANDLER ===
+  const handleCustomerTyping = (e) => {
+    setUserInput(e.target.value);
+    if (!customerSessionId) return;
+    updateDoc(doc(db, 'sessions', customerSessionId), { userTyping: true });
+    clearTimeout(customerTypingTimeoutRef.current);
+    customerTypingTimeoutRef.current = setTimeout(() => {
+      updateDoc(doc(db, 'sessions', customerSessionId), { userTyping: false });
+    }, 2000);
   };
 
   const handleCustomerSend = async (e) => {
@@ -186,10 +215,25 @@ export default function App() {
     if (!userInput.trim() || !customerSessionId) return;
     const text = userInput.trim();
     setUserInput('');
+    clearTimeout(customerTypingTimeoutRef.current);
     try {
-      await setDoc(doc(db, 'sessions', customerSessionId), { status: 'waiting', lastMessage: text, updatedAt: Date.now() }, { merge: true });
+      await setDoc(doc(db, 'sessions', customerSessionId), { 
+        status: 'waiting', lastMessage: text, updatedAt: Date.now(), 
+        userTyping: false, unreadAdmin: increment(1) // Increment unread for Admin
+      }, { merge: true });
       await addDoc(collection(db, `sessions/${customerSessionId}/messages`), { text, sender: 'user', createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
     } catch (err) { showToast("Error.", "error"); }
+  };
+
+  // === NEW: ADMIN TYPING HANDLER ===
+  const handleAdminTyping = (e) => {
+    setAdminReplyText(e.target.value);
+    if (!activeAdminSessionId) return;
+    updateDoc(doc(db, 'sessions', activeAdminSessionId), { agentTyping: true });
+    clearTimeout(adminTypingTimeoutRef.current);
+    adminTypingTimeoutRef.current = setTimeout(() => {
+      updateDoc(doc(db, 'sessions', activeAdminSessionId), { agentTyping: false });
+    }, 2000);
   };
 
   const handleAdminSend = async (e) => {
@@ -197,8 +241,12 @@ export default function App() {
     if (!adminReplyText.trim() || !activeAdminSessionId) return;
     const text = adminReplyText.trim();
     setAdminReplyText('');
+    clearTimeout(adminTypingTimeoutRef.current);
     try {
-      await updateDoc(doc(db, 'sessions', activeAdminSessionId), { status: 'active', assignedAgent: activeAgent, lastMessage: `Agent: ${text}`, updatedAt: Date.now() });
+      await updateDoc(doc(db, 'sessions', activeAdminSessionId), { 
+        status: 'active', assignedAgent: activeAgent, lastMessage: `Agent: ${text}`, updatedAt: Date.now(), 
+        agentTyping: false, unreadUser: increment(1) // Increment unread for Customer
+      });
       await addDoc(collection(db, `sessions/${activeAdminSessionId}/messages`), { text, sender: 'agent', agentDetails: activeAgent, createdAt: Date.now(), timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
     } catch (err) { showToast("Error.", "error"); }
   };
@@ -206,7 +254,7 @@ export default function App() {
   const handleResolveSession = async () => {
     if (!activeAdminSessionId) return;
     try {
-      await updateDoc(doc(db, 'sessions', activeAdminSessionId), { status: 'resolved', updatedAt: Date.now() });
+      await updateDoc(doc(db, 'sessions', activeAdminSessionId), { status: 'resolved', updatedAt: Date.now(), unreadAdmin: 0, userTyping: false, agentTyping: false });
       setActiveAdminSessionId(null); 
     } catch (err) { showToast("Error.", "error"); }
   };
@@ -216,23 +264,11 @@ export default function App() {
     if (passwordInput === 'admin123') { setIsAuthenticated(true); } else { setLoginError(true); showToast("Invalid passcode.", "error"); }
   };
 
-  // === NEW: STRICT SEARCH FILTER LOGIC APPLIED HERE ===
   const displayedSessions = agentSessions.filter(s => {
-    // 1. Check if the status matches the current tab
     const statusMatch = queueFilter === 'active' ? (s.status === 'waiting' || s.status === 'active') : s.status === 'resolved';
-    
-    // 2. Check if the agent matches the current view mode (STRICT FILTER)
     let agentMatch = true;
-    if (viewMode !== 'all') {
-      // This now strictly requires the agent ID to match, hiding unassigned chats
-      agentMatch = s.assignedAgent && s.assignedAgent.id === viewMode;
-    }
-    
-    // 3. Check if the search query matches the customer name or email
-    const searchMatch = searchQuery === '' || 
-      (s.customerName && s.customerName.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (s.customerEmail && s.customerEmail.toLowerCase().includes(searchQuery.toLowerCase()));
-
+    if (viewMode !== 'all') { agentMatch = s.assignedAgent && s.assignedAgent.id === viewMode; }
+    const searchMatch = searchQuery === '' || (s.customerName && s.customerName.toLowerCase().includes(searchQuery.toLowerCase())) || (s.customerEmail && s.customerEmail.toLowerCase().includes(searchQuery.toLowerCase()));
     return statusMatch && agentMatch && searchMatch;
   });
 
@@ -254,7 +290,7 @@ export default function App() {
                     <MessageSquare className="w-6 h-6" />
                   </div>
                   <h3 className="font-bold text-slate-800 text-lg">Welcome!</h3>
-                  <p className="text-xs text-slate-500 mt-1">Please enter your details to start chatting with an agent, or to resume a previous chat.</p>
+                  <p className="text-xs text-slate-500 mt-1">Please enter your details to start chatting with an agent.</p>
                 </div>
 
                 <form onSubmit={handleStartChat} className="space-y-4">
@@ -303,6 +339,23 @@ export default function App() {
                       </div>
                     </div>
                   ))}
+                  
+                  {/* === NEW: AGENT TYPING INDICATOR BUBBLE === */}
+                  {currentSessionData?.agentTyping && (
+                    <div className="flex gap-2 max-w-[88%] mr-auto">
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow-sm mt-auto mb-1 bg-slate-300">
+                        <Activity className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-500 ml-1 mb-1 block font-medium">Agent is typing...</span>
+                        <div className="p-3 text-sm shadow-sm bg-white border border-slate-100 rounded-2xl rounded-bl-sm flex gap-1 items-center h-10">
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div ref={customerMessagesEndRef} />
                 </div>
                 
@@ -312,7 +365,7 @@ export default function App() {
                 </div>
 
                 <form onSubmit={handleCustomerSend} className="p-3 border-t bg-white flex gap-2 shrink-0">
-                  <input type="text" value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="Type a message..." style={{ color: '#0f172a', backgroundColor: '#f8fafc' }} className="flex-1 text-sm px-4 py-2.5 rounded-full border border-slate-200 focus:outline-none focus:border-blue-500" />
+                  <input type="text" value={userInput} onChange={handleCustomerTyping} placeholder="Type a message..." style={{ color: '#0f172a', backgroundColor: '#f8fafc' }} className="flex-1 text-sm px-4 py-2.5 rounded-full border border-slate-200 focus:outline-none focus:border-blue-500" />
                   <button type="submit" style={{ backgroundColor: config.primaryColor }} className="h-10 w-10 rounded-full text-white flex items-center justify-center shadow-md hover:scale-105 transition-transform"><Send className="h-4 w-4 ml-0.5" /></button>
                 </form>
               </>
@@ -320,6 +373,12 @@ export default function App() {
           </div>
         ) : (
           <button onClick={() => setIsWidgetOpen(true)} style={{ backgroundColor: config.primaryColor }} className="w-16 h-16 rounded-full text-white shadow-[0_8px_30px_rgb(0,0,0,0.2)] flex items-center justify-center hover:scale-105 transition-transform relative group">
+            {/* === NEW: UNREAD BADGE ON FLOATING WIDGET === */}
+            {currentSessionData?.unreadUser > 0 && (
+              <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] font-bold h-5 w-5 flex items-center justify-center rounded-full border-2 border-white">
+                {currentSessionData.unreadUser}
+              </span>
+            )}
             <MessageSquare className="h-7 w-7 group-hover:hidden" />
             <Activity className="h-7 w-7 hidden group-hover:block" />
           </button>
@@ -380,92 +439,43 @@ export default function App() {
 
             <div className="p-4 border-b border-slate-800 bg-slate-950 flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="flex flex-wrap gap-2 flex-1">
-                <button
-                  onClick={() => setViewMode('all')}
-                  className={`px-4 py-2 rounded border text-xs font-medium transition ${viewMode === 'all' ? 'bg-slate-800 border-blue-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
-                  style={{ borderBottomColor: viewMode === 'all' ? '#3b82f6' : '' }}
-                >
-                  All Chats
-                </button>
+                <button onClick={() => setViewMode('all')} className={`px-4 py-2 rounded border text-xs font-medium transition ${viewMode === 'all' ? 'bg-slate-800 border-blue-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`} style={{ borderBottomColor: viewMode === 'all' ? '#3b82f6' : '' }}>All Chats</button>
                 {agents.map(agent => (
-                   <button
-                   key={agent.id}
-                   onClick={() => { 
-                     setViewMode(agent.id); 
-                     setActiveAgentId(agent.id); 
-                   }}
-                   className={`px-4 py-2 rounded border text-xs font-medium transition ${viewMode === agent.id ? 'bg-slate-800 border-slate-600 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`}
-                   style={{ borderBottomColor: viewMode === agent.id ? agent.color : '' }}
-                 >
-                   {agent.name}
-                 </button>
+                   <button key={agent.id} onClick={() => { setViewMode(agent.id); setActiveAgentId(agent.id); }} className={`px-4 py-2 rounded border text-xs font-medium transition ${viewMode === agent.id ? 'bg-slate-800 border-slate-600 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'}`} style={{ borderBottomColor: viewMode === agent.id ? agent.color : '' }}>{agent.name}</button>
                 ))}
               </div>
 
               <form onSubmit={handleAddAgent} className="flex gap-2 shrink-0">
-                 <input 
-                   type="text" 
-                   value={newAgentName} 
-                   onChange={(e) => setNewAgentName(e.target.value)} 
-                   placeholder="New agent name..." 
-                   className="bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded focus:outline-none focus:border-blue-500 w-36"
-                 />
-                 <button type="submit" className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-2 rounded transition flex items-center justify-center" title="Add Agent">
-                    <Plus className="w-4 h-4" />
-                 </button>
+                 <input type="text" value={newAgentName} onChange={(e) => setNewAgentName(e.target.value)} placeholder="New agent name..." className="bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded focus:outline-none focus:border-blue-500 w-36" />
+                 <button type="submit" className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-2 rounded transition flex items-center justify-center" title="Add Agent"><Plus className="w-4 h-4" /></button>
               </form>
             </div>
             
             {viewMode === 'all' && (
               <div className="px-4 py-2 bg-slate-900/50 border-b border-slate-800 flex items-center gap-1">
-                <p className="text-[10px] text-slate-500 flex items-center gap-1">
-                  <Inbox className="w-3 h-3" /> Viewing all queues. Agent replies will be sent as <strong style={{color: activeAgent.color}}>{activeAgent.name}</strong>.
-                </p>
+                <p className="text-[10px] text-slate-500 flex items-center gap-1"><Inbox className="w-3 h-3" /> Viewing all queues. Agent replies will be sent as <strong style={{color: activeAgent.color}}>{activeAgent.name}</strong>.</p>
               </div>
             )}
 
             <div className="flex-1 flex overflow-hidden">
               <div className="w-1/3 md:w-80 border-r border-slate-800 bg-slate-900 flex flex-col shrink-0">
                 
-                {/* === NEW: SEARCH BAR === */}
                 <div className="p-3 border-b border-slate-800 bg-slate-900 shrink-0">
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                    <input 
-                      type="text" 
-                      placeholder="Search name or email..." 
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:border-blue-500 placeholder:text-slate-600"
-                    />
-                    {searchQuery && (
-                      <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
+                    <input type="text" placeholder="Search name or email..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:border-blue-500 placeholder:text-slate-600" />
+                    {searchQuery && (<button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"><X className="w-3 h-3" /></button>)}
                   </div>
                 </div>
 
                 <div className="flex border-b border-slate-800 bg-slate-950 shrink-0">
-                  <button 
-                    onClick={() => setQueueFilter('active')}
-                    className={`flex-1 py-3 text-xs font-medium border-b-2 transition ${queueFilter === 'active' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
-                  >
-                    Waiting & Active
-                  </button>
-                  <button 
-                    onClick={() => setQueueFilter('resolved')}
-                    className={`flex-1 py-3 text-xs font-medium border-b-2 transition ${queueFilter === 'resolved' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
-                  >
-                    Resolved
-                  </button>
+                  <button onClick={() => setQueueFilter('active')} className={`flex-1 py-3 text-xs font-medium border-b-2 transition ${queueFilter === 'active' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>Waiting & Active</button>
+                  <button onClick={() => setQueueFilter('resolved')} className={`flex-1 py-3 text-xs font-medium border-b-2 transition ${queueFilter === 'resolved' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>Resolved</button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
                   {displayedSessions.length === 0 ? (
-                    <div className="p-6 text-center text-xs text-slate-500 mt-10">
-                      {searchQuery ? 'No chats match your search.' : `No ${queueFilter} chats available.`}
-                    </div>
+                    <div className="p-6 text-center text-xs text-slate-500 mt-10">{searchQuery ? 'No chats match your search.' : `No ${queueFilter} chats available.`}</div>
                   ) : (
                     displayedSessions.map(session => (
                       <button
@@ -478,29 +488,34 @@ export default function App() {
                             {session.customerName || session.id}
                           </span>
                           
-                          {session.status === 'waiting' && <span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span></span>}
-                          {session.status === 'active' && <Circle className="h-2 w-2 fill-emerald-500 text-emerald-500" />}
-                          {session.status === 'resolved' && <CheckCircle2 className="h-3 w-3 text-slate-500" />}
+                          <div className="flex items-center gap-2">
+                            {/* === NEW: UNREAD BADGE IN QUEUE === */}
+                            {session.unreadAdmin > 0 && (
+                              <span className="bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                                {session.unreadAdmin}
+                              </span>
+                            )}
+                            {session.status === 'waiting' && <span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span></span>}
+                            {session.status === 'active' && <Circle className="h-2 w-2 fill-emerald-500 text-emerald-500" />}
+                            {session.status === 'resolved' && <CheckCircle2 className="h-3 w-3 text-slate-500" />}
+                          </div>
                         </div>
                         
                         <div className="flex items-center justify-between mb-2">
-                          <p className="text-[10px] text-slate-400 truncate font-mono">
-                            {session.customerEmail || 'Guest User'}
-                          </p>
-                          {session.source && (
-                            <span className="bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider border border-blue-800/50 flex items-center gap-1">
-                              <Globe className="w-2.5 h-2.5" /> {session.source}
-                            </span>
-                          )}
+                          <p className="text-[10px] text-slate-400 truncate font-mono">{session.customerEmail || 'Guest User'}</p>
+                          {session.source && (<span className="bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider border border-blue-800/50 flex items-center gap-1"><Globe className="w-2.5 h-2.5" /> {session.source}</span>)}
                         </div>
 
-                        <p className="text-xs text-slate-300 truncate bg-slate-950 p-2 rounded-lg border border-slate-800">
-                          {session.lastMessage || 'Started chat...'}
-                        </p>
-
-                        {session.assignedAgent && (
-                          <p className="text-[9px] text-slate-500 mt-2">Handled by: {session.assignedAgent.name}</p>
+                        {/* === NEW: TYPING INDICATOR IN QUEUE === */}
+                        {session.userTyping ? (
+                          <p className="text-xs text-blue-400 italic bg-slate-950 p-2 rounded-lg border border-slate-800">Typing...</p>
+                        ) : (
+                          <p className="text-xs text-slate-300 truncate bg-slate-950 p-2 rounded-lg border border-slate-800">
+                            {session.lastMessage || 'Started chat...'}
+                          </p>
                         )}
+
+                        {session.assignedAgent && (<p className="text-[9px] text-slate-500 mt-2">Handled by: {session.assignedAgent.name}</p>)}
                       </button>
                     ))
                   )}
@@ -547,12 +562,27 @@ export default function App() {
                           </div>
                         </div>
                       ))}
+                      
+                      {/* === NEW: CUSTOMER TYPING INDICATOR BUBBLE IN DASHBOARD === */}
+                      {agentSessions.find(s => s.id === activeAdminSessionId)?.userTyping && (
+                         <div className="flex flex-col max-w-[85%] mr-auto items-start">
+                           <span className="text-[10px] text-slate-500 mb-1 font-medium italic">
+                             {agentSessions.find(s => s.id === activeAdminSessionId)?.customerName} is typing...
+                           </span>
+                           <div className="p-3 rounded-xl bg-slate-800 flex gap-1 items-center h-10">
+                             <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce"></span>
+                             <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                             <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+                           </div>
+                         </div>
+                      )}
+                      
                       <div ref={adminMessagesEndRef} />
                     </div>
 
                     <form onSubmit={handleAdminSend} className="p-4 bg-slate-900 border-t border-slate-800 flex gap-2 shrink-0">
                       <input 
-                        type="text" value={adminReplyText} onChange={(e) => setAdminReplyText(e.target.value)}
+                        type="text" value={adminReplyText} onChange={handleAdminTyping}
                         placeholder="Type reply..."
                         className="flex-1 text-sm bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-blue-500"
                       />
